@@ -145,6 +145,7 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setExtensionFilter(value: String) {
+        _state.update { it.copy(extensionFilter = value) }
         viewModelScope.launch {
             prefs.setExtensionFilter(value)
         }
