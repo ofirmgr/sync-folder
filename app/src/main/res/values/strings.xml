@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Sync Folder</string>
+    <string name="sign_in">Sign in with Google</string>
+    <string name="sign_out">Sign out</string>
+    <string name="pick_folder">Pick Folder</string>
+    <string name="sync_now">Sync Now</string>
+    <string name="auto_sync">Auto sync (every 15 min)</string>
+    <string name="channel_name">Sync progress</string>
+    <string name="channel_description">Shows sync progress</string>
+    <string name="notif_sync_title">Syncing folder…</string>
+    <string name="notif_reauth_title">Re-authentication needed</string>
+    <string name="notif_reauth_text">Open Sync Folder to re-authorize Google Drive access.</string>
+</resources>

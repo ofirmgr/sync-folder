@@ -1,0 +1,4 @@
+-keep class com.ofir.syncfolder.data.** { *; }
+-keep class androidx.credentials.** { *; }
+-keep class com.google.android.libraries.identity.googleid.** { *; }
+-keep class com.google.android.gms.auth.** { *; }
