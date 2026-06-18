@@ -12,6 +12,14 @@ val localProps = Properties().also { props ->
     if (f.exists()) props.load(f.inputStream())
 }
 
+val keystoreProps = Properties().also { props ->
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) props.load(f.inputStream())
+}
+
+fun quotedBuildConfigValue(value: String): String =
+    "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+
 android {
     namespace = "com.ofir.syncfolder"
     compileSdk = 35
@@ -24,12 +32,40 @@ android {
         versionName = "1.0"
 
         val serverClientId = localProps.getProperty("server_client_id", "")
-        buildConfigField("String", "SERVER_CLIENT_ID", "\"$serverClientId\"")
+        val privacyPolicyUrl = localProps.getProperty("privacy_policy_url", "")
+        val termsUrl = localProps.getProperty("terms_url", "")
+        val accessibilityUrl = localProps.getProperty("accessibility_url", "")
+        buildConfigField("String", "SERVER_CLIENT_ID", quotedBuildConfigValue(serverClientId))
+        buildConfigField("String", "PRIVACY_POLICY_URL", quotedBuildConfigValue(privacyPolicyUrl))
+        buildConfigField("String", "TERMS_URL", quotedBuildConfigValue(termsUrl))
+        buildConfigField("String", "ACCESSIBILITY_URL", quotedBuildConfigValue(accessibilityUrl))
+    }
+
+    signingConfigs {
+        if (keystoreProps.isNotEmpty()) {
+            create("release") {
+                storeFile = rootProject.file(
+                    requireNotNull(keystoreProps.getProperty("storeFile")) {
+                        "keystore.properties is missing storeFile"
+                    }
+                )
+                storePassword = requireNotNull(keystoreProps.getProperty("storePassword")) {
+                    "keystore.properties is missing storePassword"
+                }
+                keyAlias = requireNotNull(keystoreProps.getProperty("keyAlias")) {
+                    "keystore.properties is missing keyAlias"
+                }
+                keyPassword = requireNotNull(keystoreProps.getProperty("keyPassword")) {
+                    "keystore.properties is missing keyPassword"
+                }
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
+            signingConfig = signingConfigs.findByName("release")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -47,6 +83,39 @@ android {
         compose = true
         buildConfig = true
     }
+}
+
+tasks.register("validatePlayRelease") {
+    group = "verification"
+    description = "Checks configuration required before uploading a release to Google Play."
+
+    doLast {
+        val missing = buildList {
+            if (localProps.getProperty("server_client_id").isNullOrBlank()) {
+                add("server_client_id in local.properties")
+            }
+            if (localProps.getProperty("privacy_policy_url").isNullOrBlank()) {
+                add("privacy_policy_url in local.properties")
+            }
+            if (localProps.getProperty("terms_url").isNullOrBlank()) {
+                add("terms_url in local.properties")
+            }
+            if (localProps.getProperty("accessibility_url").isNullOrBlank()) {
+                add("accessibility_url in local.properties")
+            }
+            if (keystoreProps.isEmpty()) {
+                add("keystore.properties")
+            }
+        }
+
+        check(missing.isEmpty()) {
+            "Google Play release configuration is incomplete:\n- ${missing.joinToString("\n- ")}"
+        }
+    }
+}
+
+tasks.matching { it.name == "bundleRelease" }.configureEach {
+    dependsOn("validatePlayRelease")
 }
 
 dependencies {

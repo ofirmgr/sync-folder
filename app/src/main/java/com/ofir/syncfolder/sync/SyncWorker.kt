@@ -1,5 +1,6 @@
 package com.ofir.syncfolder.sync
 
+import android.annotation.SuppressLint
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
@@ -20,6 +21,13 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     override suspend fun doWork(): Result {
         val prefs = Prefs(applicationContext)
         val snap = prefs.snapshot()
+
+        if (snap.termsAcceptedVersion < Prefs.CURRENT_TERMS_VERSION) {
+            return failure("Open the app and accept the current Terms of Use")
+        }
+        if (snap.autoSync && !snap.backgroundSyncConsent) {
+            return failure("Open the app and approve background sync")
+        }
 
         val treeUriStr = snap.treeUri ?: return failure("No folder selected")
         val folderName = snap.folderName ?: "Synced Folder"
@@ -63,6 +71,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     private fun failure(msg: String) =
         Result.failure(workDataOf("error" to msg))
 
+    @SuppressLint("InlinedApi")
     private fun makeForegroundInfo(text: String): ForegroundInfo {
         val notif = NotificationCompat.Builder(applicationContext, SyncApp.CHANNEL_ID)
             .setContentTitle(applicationContext.getString(R.string.notif_sync_title))

@@ -3,9 +3,7 @@ package com.ofir.syncfolder.auth
 import android.content.Context
 import android.content.IntentSender
 import androidx.credentials.Credential
-import androidx.credentials.CredentialManager
 import androidx.credentials.GetCredentialRequest
-import androidx.credentials.exceptions.GetCredentialException
 import com.google.android.gms.auth.api.identity.AuthorizationRequest
 import com.google.android.gms.auth.api.identity.Identity
 import com.google.android.gms.common.api.Scope
@@ -38,6 +36,9 @@ class AuthManager(private val context: Context) {
     }
 
     fun extractEmail(credential: Credential): String {
+        require(credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+            "Unexpected credential type"
+        }
         val googleCred = GoogleIdTokenCredential.createFrom(credential.data)
         return googleCred.id
     }

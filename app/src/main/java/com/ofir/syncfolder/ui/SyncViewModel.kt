@@ -27,6 +27,8 @@ data class SyncUiState(
     val needsReauth: Boolean = false,
     val syncFromMs: Long? = null,
     val extensionFilter: String = "",
+    val termsAccepted: Boolean = false,
+    val backgroundSyncConsent: Boolean = false,
     val status: Status = Status.Idle,
     val currentFile: String? = null,
     val filesDone: Int = 0
@@ -63,7 +65,12 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         viewModelScope.launch {
+            prefs.clearLegacyAccessToken()
             prefs.data.collect { p ->
+                if (p.autoSync && p.termsAcceptedVersion < Prefs.CURRENT_TERMS_VERSION) {
+                    prefs.setAutoSync(false)
+                    wm.cancelUniqueWork(SyncWorker.PERIODIC_WORK_NAME)
+                }
                 _state.update {
                     it.copy(
                         accountEmail = p.accountEmail,
@@ -72,7 +79,9 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
                         lastSyncMs = p.lastSyncMs,
                         needsReauth = p.needsReauth,
                         syncFromMs = p.syncFromMs,
-                        extensionFilter = p.extensionFilter ?: ""
+                        extensionFilter = p.extensionFilter ?: "",
+                        termsAccepted = p.termsAcceptedVersion >= Prefs.CURRENT_TERMS_VERSION,
+                        backgroundSyncConsent = p.backgroundSyncConsent
                     )
                 }
             }
@@ -98,7 +107,6 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
                 val (token, sender) = authManager.authorizeForDrive()
                 when {
                     token != null -> {
-                        prefs.setAccessToken(token)
                         prefs.setNeedsReauth(false)
                         _state.update { it.copy(status = SyncUiState.Status.Idle) }
                     }
@@ -120,11 +128,14 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val result = Identity.getAuthorizationClient(getApplication())
                     .getAuthorizationResultFromIntent(data!!)
-                result.accessToken?.let {
-                    prefs.setAccessToken(it)
+                if (result.accessToken != null) {
                     prefs.setNeedsReauth(false)
+                    _state.update { it.copy(status = SyncUiState.Status.Idle) }
+                } else {
+                    _state.update {
+                        it.copy(status = SyncUiState.Status.Error("Drive authorization did not return access"))
+                    }
                 }
-                _state.update { it.copy(status = SyncUiState.Status.Idle) }
             } catch (e: Exception) {
                 _state.update { it.copy(status = SyncUiState.Status.Error("Drive auth result error: ${e.message}")) }
             }
@@ -153,8 +164,26 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setAutoSync(enabled: Boolean) {
         viewModelScope.launch {
+            if (enabled && !state.value.backgroundSyncConsent) {
+                _events.send(UiEvent.Toast("Background sync consent is required"))
+                return@launch
+            }
             prefs.setAutoSync(enabled)
             if (enabled) schedulePeriodicSync() else wm.cancelUniqueWork(SyncWorker.PERIODIC_WORK_NAME)
+        }
+    }
+
+    fun acceptTerms() {
+        viewModelScope.launch {
+            prefs.acceptTerms(Prefs.CURRENT_TERMS_VERSION)
+        }
+    }
+
+    fun enableAutoSyncAfterConsent() {
+        viewModelScope.launch {
+            prefs.setBackgroundSyncConsent(true)
+            prefs.setAutoSync(true)
+            schedulePeriodicSync()
         }
     }
 

@@ -69,7 +69,9 @@ object SyncEngine {
                     val stream = context.contentResolver.openInputStream(doc.uri)
                         ?: continue
                     val mime = doc.type ?: "application/octet-stream"
-                    val driveId = drive.uploadFile(name, driveFolderId, stream, mime)
+                    val driveId = stream.use {
+                        drive.uploadFile(name, driveFolderId, it, mime, doc.length())
+                    }
                     dao.upsert(FileRecord(relPath, doc.length(), doc.lastModified(), driveId))
                     uploaded++
                 }

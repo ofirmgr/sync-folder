@@ -1,11 +1,17 @@
 package com.ofir.syncfolder.ui
 
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -13,7 +19,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.credentials.CredentialManager
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.documentfile.provider.DocumentFile
@@ -31,6 +41,37 @@ fun SyncScreen(viewModel: SyncViewModel) {
 
     val credentialManager = remember { CredentialManager.create(context) }
     val authManager = remember { AuthManager(context) }
+    var showTermsDialog by remember { mutableStateOf(false) }
+    var showBackgroundSyncDialog by remember { mutableStateOf(false) }
+    var actionAfterTerms by remember { mutableStateOf(PendingAction.None) }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            viewModel.enableAutoSyncAfterConsent()
+        } else {
+            scope.launch {
+                snackbarHostState.showSnackbar(
+                    "Notifications are required to show background sync activity."
+                )
+            }
+        }
+    }
+
+    fun enableAutoSyncAfterDisclosure() {
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            viewModel.enableAutoSyncAfterConsent()
+        }
+    }
 
     // Drive authorization result launcher
     val driveAuthLauncher = rememberLauncherForActivityResult(
@@ -46,7 +87,7 @@ fun SyncScreen(viewModel: SyncViewModel) {
         if (uri != null) {
             context.contentResolver.takePersistableUriPermission(
                 uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
             )
             val displayName = DocumentFile.fromTreeUri(context, uri)?.name ?: "Selected Folder"
             viewModel.setFolder(uri, displayName)
@@ -77,6 +118,7 @@ fun SyncScreen(viewModel: SyncViewModel) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .verticalScroll(rememberScrollState())
                 .padding(padding)
                 .padding(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp)
@@ -137,7 +179,22 @@ fun SyncScreen(viewModel: SyncViewModel) {
                 }
                 Switch(
                     checked = state.autoSync,
-                    onCheckedChange = viewModel::setAutoSync,
+                    onCheckedChange = { enabled ->
+                        if (!enabled) {
+                            viewModel.setAutoSync(false)
+                        } else {
+                            when {
+                                !state.termsAccepted -> {
+                                    actionAfterTerms = PendingAction.EnableAutoSync
+                                    showTermsDialog = true
+                                }
+                                !state.backgroundSyncConsent -> {
+                                    showBackgroundSyncDialog = true
+                                }
+                                else -> enableAutoSyncAfterDisclosure()
+                            }
+                        }
+                    },
                     enabled = state.accountEmail != null && state.folderName != null
                 )
             }
@@ -146,7 +203,14 @@ fun SyncScreen(viewModel: SyncViewModel) {
 
             // ── Sync now button ──────────────────────────────────────────
             Button(
-                onClick = viewModel::syncNow,
+                onClick = {
+                    if (state.termsAccepted) {
+                        viewModel.syncNow()
+                    } else {
+                        actionAfterTerms = PendingAction.SyncNow
+                        showTermsDialog = true
+                    }
+                },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = state.accountEmail != null &&
                         state.folderName != null &&
@@ -159,8 +223,164 @@ fun SyncScreen(viewModel: SyncViewModel) {
 
             // ── Status area ──────────────────────────────────────────────
             StatusSection(state)
+
+            HorizontalDivider()
+
+            DataUseSection(
+                onOpenPrivacyPolicy = urlAction(context, BuildConfig.PRIVACY_POLICY_URL),
+                onOpenTerms = urlAction(context, BuildConfig.TERMS_URL),
+                onOpenAccessibility = urlAction(context, BuildConfig.ACCESSIBILITY_URL)
+            )
         }
     }
+
+    if (showTermsDialog) {
+        TermsConsentDialog(
+            onDismiss = {
+                showTermsDialog = false
+                actionAfterTerms = PendingAction.None
+            },
+            onOpenTerms = urlAction(context, BuildConfig.TERMS_URL),
+            onAccept = {
+                viewModel.acceptTerms()
+                showTermsDialog = false
+                when (actionAfterTerms) {
+                    PendingAction.SyncNow -> viewModel.syncNow()
+                    PendingAction.EnableAutoSync -> showBackgroundSyncDialog = true
+                    PendingAction.None -> Unit
+                }
+                actionAfterTerms = PendingAction.None
+            }
+        )
+    }
+
+    if (showBackgroundSyncDialog) {
+        BackgroundSyncConsentDialog(
+            onDismiss = { showBackgroundSyncDialog = false },
+            onAccept = {
+                showBackgroundSyncDialog = false
+                enableAutoSyncAfterDisclosure()
+            }
+        )
+    }
+}
+
+@Composable
+private fun DataUseSection(
+    onOpenPrivacyPolicy: (() -> Unit)?,
+    onOpenTerms: (() -> Unit)?,
+    onOpenAccessibility: (() -> Unit)?
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            "How your data is used",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Text(
+            "Sync Folder reads only the folder you choose and uploads new or changed files " +
+                "directly to your Google Drive. When Auto Sync is enabled, this can happen " +
+                "in the background every 15 minutes. The app has no developer-operated server, " +
+                "advertising, or analytics.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Column {
+            if (onOpenPrivacyPolicy != null) {
+                TextButton(onClick = onOpenPrivacyPolicy) { Text("Privacy Policy") }
+            }
+            if (onOpenTerms != null) {
+                TextButton(onClick = onOpenTerms) { Text("Terms of Use") }
+            }
+            if (onOpenAccessibility != null) {
+                TextButton(onClick = onOpenAccessibility) {
+                    Text("Accessibility Statement")
+                }
+            }
+        }
+    }
+}
+
+private enum class PendingAction {
+    None,
+    SyncNow,
+    EnableAutoSync
+}
+
+private fun urlAction(context: android.content.Context, url: String): (() -> Unit)? =
+    if (url.isBlank()) {
+        null
+    } else {
+        { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+    }
+
+@Composable
+private fun TermsConsentDialog(
+    onDismiss: () -> Unit,
+    onOpenTerms: (() -> Unit)?,
+    onAccept: () -> Unit
+) {
+    var acknowledged by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Before you sync") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "Sync Folder uploads files from the folder you select to Google Drive. " +
+                        "Sync can fail, be delayed, or be incomplete because of device, network, " +
+                        "permission, or Google service issues."
+                )
+                Text(
+                    "This app is not a substitute for an independent backup. Verify important " +
+                        "files in Google Drive and keep another copy."
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = acknowledged,
+                        onCheckedChange = { acknowledged = it }
+                    )
+                    Text("I understand and accept the Terms of Use.")
+                }
+                if (onOpenTerms != null) {
+                    TextButton(onClick = onOpenTerms) { Text("Read Terms of Use") }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onAccept, enabled = acknowledged) {
+                Text("Accept and continue")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
+@Composable
+private fun BackgroundSyncConsentDialog(
+    onDismiss: () -> Unit,
+    onAccept: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Enable background sync?") },
+        text = {
+            Text(
+                "When enabled, Sync Folder may read the selected folder and upload new or " +
+                    "changed files to Google Drive approximately every 15 minutes, including " +
+                    "when you are not actively using the app. Android may delay this work."
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onAccept) { Text("Enable") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Not now") }
+        }
+    )
 }
 
 @Composable
@@ -289,7 +509,10 @@ private fun formatDate(ms: Long): String =
 
 @Composable
 private fun StatusSection(state: SyncUiState) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
         Text(state.lastSyncLabel(), style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
 

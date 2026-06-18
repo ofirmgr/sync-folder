@@ -5,7 +5,10 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
+import okio.source
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
@@ -15,15 +18,13 @@ import java.util.concurrent.TimeUnit
 
 class TokenExpiredException : IOException("Access token expired")
 
-class DriveClient(private var accessToken: String) {
+class DriveClient(private val accessToken: String) {
 
     private val http = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(120, TimeUnit.SECONDS)
         .writeTimeout(120, TimeUnit.SECONDS)
         .build()
-
-    fun updateToken(token: String) { accessToken = token }
 
     /**
      * Returns Drive folder ID, creating it if it doesn't exist.
@@ -52,10 +53,9 @@ class DriveClient(private var accessToken: String) {
         name: String,
         parentId: String,
         stream: InputStream,
-        mimeType: String
+        mimeType: String,
+        contentLength: Long
     ): String {
-        val data = withContext(Dispatchers.IO) { stream.readBytes() }
-
         // Check if file already exists to decide create vs update
         val escaped = name.replace("\\", "\\\\").replace("'", "\\'")
         val q = "name='$escaped' and '$parentId' in parents and trashed=false"
@@ -69,10 +69,22 @@ class DriveClient(private var accessToken: String) {
 
         return if (existing.length() > 0) {
             val fileId = existing.getJSONObject(0).getString("id")
-            patchMultipart("$UPLOAD_BASE/files/$fileId?uploadType=multipart&fields=id", meta.toString(), mimeType, data)
+            patchMultipart(
+                "$UPLOAD_BASE/files/$fileId?uploadType=multipart&fields=id",
+                meta.toString(),
+                mimeType,
+                stream,
+                contentLength
+            )
                 .getString("id")
         } else {
-            postMultipart("$UPLOAD_BASE/files?uploadType=multipart&fields=id", meta.toString(), mimeType, data)
+            postMultipart(
+                "$UPLOAD_BASE/files?uploadType=multipart&fields=id",
+                meta.toString(),
+                mimeType,
+                stream,
+                contentLength
+            )
                 .getString("id")
         }
     }
@@ -99,22 +111,51 @@ class DriveClient(private var accessToken: String) {
         JSONObject(body)
     }
 
-    private suspend fun postMultipart(url: String, meta: String, mimeType: String, data: ByteArray): JSONObject =
-        multipartRequest("POST", url, meta, mimeType, data)
+    private suspend fun postMultipart(
+        url: String,
+        meta: String,
+        mimeType: String,
+        stream: InputStream,
+        contentLength: Long
+    ): JSONObject = multipartRequest("POST", url, meta, mimeType, stream, contentLength)
 
-    private suspend fun patchMultipart(url: String, meta: String, mimeType: String, data: ByteArray): JSONObject =
-        multipartRequest("PATCH", url, meta, mimeType, data)
+    private suspend fun patchMultipart(
+        url: String,
+        meta: String,
+        mimeType: String,
+        stream: InputStream,
+        contentLength: Long
+    ): JSONObject = multipartRequest("PATCH", url, meta, mimeType, stream, contentLength)
 
     private suspend fun multipartRequest(
         method: String,
         url: String,
         meta: String,
         mimeType: String,
-        data: ByteArray
+        stream: InputStream,
+        contentLength: Long
     ): JSONObject = withContext(Dispatchers.IO) {
         val boundary = "b${System.nanoTime()}"
-        val bodyBytes = buildMultipart(boundary, meta, mimeType, data)
-        val body = bodyBytes.toRequestBody("multipart/related; boundary=$boundary".toMediaType())
+        val header = (
+            "--$boundary\r\n" +
+                "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
+                "$meta\r\n" +
+                "--$boundary\r\n" +
+                "Content-Type: $mimeType\r\n\r\n"
+            ).toByteArray(Charsets.UTF_8)
+        val footer = "\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8)
+        val body = object : RequestBody() {
+            override fun contentType() = "multipart/related; boundary=$boundary".toMediaType()
+
+            override fun contentLength(): Long =
+                if (contentLength >= 0) header.size + contentLength + footer.size else -1
+
+            override fun writeTo(sink: BufferedSink) {
+                sink.write(header)
+                stream.source().use { source -> sink.writeAll(source) }
+                sink.write(footer)
+            }
+        }
         val req = Request.Builder()
             .url(url)
             .method(method, body)
@@ -125,12 +166,6 @@ class DriveClient(private var accessToken: String) {
         if (resp.code == 401) throw TokenExpiredException()
         if (!resp.isSuccessful) throw IOException("$method $url → ${resp.code}: $respBody")
         JSONObject(respBody)
-    }
-
-    private fun buildMultipart(boundary: String, meta: String, mimeType: String, data: ByteArray): ByteArray {
-        val header = "--$boundary\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n$meta\r\n--$boundary\r\nContent-Type: $mimeType\r\n\r\n"
-        val footer = "\r\n--$boundary--\r\n"
-        return header.toByteArray(Charsets.UTF_8) + data + footer.toByteArray(Charsets.UTF_8)
     }
 
     companion object {
