@@ -59,9 +59,9 @@ After enrolling in Play App Signing:
 
 ```properties
 server_client_id=YOUR_WEB_CLIENT_ID.apps.googleusercontent.com
-privacy_policy_url=https://ofirmgr.github.io/sync-folder/privacy/
-terms_url=https://ofirmgr.github.io/sync-folder/terms/
-accessibility_url=https://ofirmgr.github.io/sync-folder/accessibility/
+privacy_policy_url=https://ofirmgr.github.io/sync-folder-legal/privacy/
+terms_url=https://ofirmgr.github.io/sync-folder-legal/terms/
+accessibility_url=https://ofirmgr.github.io/sync-folder-legal/accessibility/
 ```
 
 Set the OAuth consent screen to **Production**, list the exact `drive.file`

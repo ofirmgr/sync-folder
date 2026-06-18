@@ -45,9 +45,9 @@ Or manually — see the inline comments in `local.properties`.
 Release builds should also point to the public privacy policy shown in the app:
 
 ```properties
-privacy_policy_url=https://ofirmgr.github.io/sync-folder/privacy/
-terms_url=https://ofirmgr.github.io/sync-folder/terms/
-accessibility_url=https://ofirmgr.github.io/sync-folder/accessibility/
+privacy_policy_url=https://ofirmgr.github.io/sync-folder-legal/privacy/
+terms_url=https://ofirmgr.github.io/sync-folder-legal/terms/
+accessibility_url=https://ofirmgr.github.io/sync-folder-legal/accessibility/
 ```
 
 ### 4. Build and install
