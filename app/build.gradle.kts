@@ -12,9 +12,17 @@ val localProps = Properties().also { props ->
     if (f.exists()) props.load(f.inputStream())
 }
 
+val externalKeystorePropsPath: String =
+    System.getenv("SYNCFOLDER_KEYSTORE_PROPERTIES")
+        ?: "${System.getProperty("user.home")}/Library/Application Support/SyncFolder/keys/keystore.properties"
+
 val keystoreProps = Properties().also { props ->
-    val f = rootProject.file("keystore.properties")
-    if (f.exists()) props.load(f.inputStream())
+    val projectFile = rootProject.file("keystore.properties")
+    val externalFile = file(externalKeystorePropsPath)
+    when {
+        projectFile.exists() -> props.load(projectFile.inputStream())
+        externalFile.exists() -> props.load(externalFile.inputStream())
+    }
 }
 
 fun quotedBuildConfigValue(value: String): String =
