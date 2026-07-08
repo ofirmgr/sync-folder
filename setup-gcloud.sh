@@ -5,7 +5,7 @@
 set -e
 
 PROJECT_ID="${1:-sync-folder-app}"
-SUPPORT_EMAIL="${2:-ofirmgr@gmail.com}"
+SUPPORT_EMAIL="${2:-support@example.com}"
 PACKAGE="com.ofir.syncfolder"
 KEYSTORE="$HOME/.android/debug.keystore"
 LOCAL_PROPS="$(dirname "$0")/local.properties"

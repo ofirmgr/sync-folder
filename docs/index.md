@@ -13,4 +13,4 @@ selected by the user to the user's Google Drive.
 - [Terms of Use]({{ site.baseurl }}/terms/)
 - [Accessibility Statement]({{ site.baseurl }}/accessibility/)
 
-Support: [ofirmgr@gmail.com](mailto:ofirmgr@gmail.com)
+Support: [support@example.com](mailto:support@example.com)

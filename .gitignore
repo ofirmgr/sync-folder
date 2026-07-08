@@ -5,6 +5,13 @@ local.properties
 keystore.properties
 *.jks
 *.keystore
+*.aab
+*.apk
+*.apks
+*.idsig
+google-services.json
+.env
+.env.*
 /.idea
 .DS_Store
 build/

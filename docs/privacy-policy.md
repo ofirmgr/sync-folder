@@ -8,7 +8,7 @@ permalink: /privacy/
 
 Last updated: June 18, 2026
 
-Sync Folder is published by Ofir Meguri. This policy explains how the
+Sync Folder is published by the app publisher. This policy explains how the
 Sync Folder Android application handles information.
 
 ## Information the app accesses
@@ -30,7 +30,7 @@ the background approximately every 15 minutes when a network connection is
 available.
 
 Files are transmitted directly from the user's device to Google Drive over
-HTTPS. Ofir Meguri does not operate a server that receives or stores the
+HTTPS. The app publisher does not operate a server that receives or stores the
 user's files, file metadata, Google access tokens, or Google Account email
 address.
 
@@ -71,6 +71,5 @@ app.
 
 For privacy questions or requests, contact:
 
-Ofir Meguri  
-ofirmgr@gmail.com  
-Israel
+Sync Folder support
+support@example.com

@@ -1,11 +1,11 @@
 title: Sync Folder
 description: Legal and accessibility information for the Sync Folder Android app.
 theme: minima
-url: https://ofirmgr.github.io
-baseurl: /sync-folder-legal
+url: https://example.com
+baseurl: /sync-folder
 author:
-  name: Ofir Meguri
-  email: ofirmgr@gmail.com
+  name: Sync Folder Maintainer
+  email: support@example.com
 header_pages:
   - privacy-policy.md
   - terms-of-use.md

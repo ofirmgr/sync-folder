@@ -2,6 +2,10 @@
 
 Android app that syncs a local folder to your Google Drive (one-way upload).
 
+## App Screenshot
+
+![Sync Folder app screen](docs/images/ui.png)
+
 - Picks any folder via Android's system folder picker (SAF)
 - Uploads new/changed files to a matching folder in your Drive (`drive.file` scope — visible in My Drive)
 - Auto-syncs every 15 minutes in the background via WorkManager
@@ -45,9 +49,9 @@ Or manually — see the inline comments in `local.properties`.
 Release builds should also point to the public privacy policy shown in the app:
 
 ```properties
-privacy_policy_url=https://ofirmgr.github.io/sync-folder-legal/privacy/
-terms_url=https://ofirmgr.github.io/sync-folder-legal/terms/
-accessibility_url=https://ofirmgr.github.io/sync-folder-legal/accessibility/
+privacy_policy_url=https://example.com/sync-folder/privacy/
+terms_url=https://example.com/sync-folder/terms/
+accessibility_url=https://example.com/sync-folder/accessibility/
 ```
 
 ### 4. Build and install

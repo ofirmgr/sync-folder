@@ -8,9 +8,9 @@ Before creating the app in Play Console, confirm:
 
 - Store name: **Sync Folder**
 - Package/application ID: `com.ofir.syncfolder`
-- Publisher name: **Ofir Meguri**
+- Publisher name: your public publisher name
 - Default language
-- Support email: **ofirmgr@gmail.com**
+- Support email: your public support email
 - Public privacy-policy URL
 
 The package ID cannot be changed after the first Play release.
@@ -59,9 +59,9 @@ After enrolling in Play App Signing:
 
 ```properties
 server_client_id=YOUR_WEB_CLIENT_ID.apps.googleusercontent.com
-privacy_policy_url=https://ofirmgr.github.io/sync-folder-legal/privacy/
-terms_url=https://ofirmgr.github.io/sync-folder-legal/terms/
-accessibility_url=https://ofirmgr.github.io/sync-folder-legal/accessibility/
+privacy_policy_url=https://example.com/sync-folder/privacy/
+terms_url=https://example.com/sync-folder/terms/
+accessibility_url=https://example.com/sync-folder/accessibility/
 ```
 
 Set the OAuth consent screen to **Production**, list the exact `drive.file`
@@ -125,7 +125,7 @@ Prepare:
 - At least 2 phone screenshots; 4-8 is better
 - Short description, up to 80 characters
 - Full description, up to 4,000 characters
-- Support email: **ofirmgr@gmail.com**
+- Support email: your public support email
 - Website is strongly recommended
 
 Suggested copy:
