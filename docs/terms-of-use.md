@@ -9,7 +9,7 @@ permalink: /terms/
 Last updated: June 18, 2026
 
 These Terms of Use govern use of the Sync Folder Android application published
-by the app publisher. By accepting these terms or using the synchronization feature,
+by Ofir Meguri. By accepting these terms or using the synchronization feature,
 the user agrees to them.
 
 ## The service
@@ -58,7 +58,7 @@ excludes a warranty or consumer right that cannot legally be excluded.
 
 ## Limitation of liability
 
-To the maximum extent permitted by applicable law, the app publisher will not be
+To the maximum extent permitted by applicable law, Ofir Meguri will not be
 liable for indirect, incidental, special, consequential, or punitive damages,
 or for loss, corruption, disclosure, or failure to upload files arising from
 use of or inability to use the app.
@@ -80,5 +80,5 @@ mandatory consumer protections that apply in the user's place of residence.
 
 Questions about these terms can be sent to:
 
-Sync Folder support
-support@example.com
+Ofir Meguri
+ofirmgr@gmail.com

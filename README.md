@@ -44,16 +44,6 @@ The script automates: project creation, Drive API enablement, SHA-1 extraction, 
 
 Or manually — see the inline comments in `local.properties`.
 
-### Privacy policy URL
-
-Release builds should also point to the public privacy policy shown in the app:
-
-```properties
-privacy_policy_url=https://example.com/sync-folder/privacy/
-terms_url=https://example.com/sync-folder/terms/
-accessibility_url=https://example.com/sync-folder/accessibility/
-```
-
 ### 4. Build and install
 
 ```bash
@@ -72,14 +62,6 @@ accessibility_url=https://example.com/sync-folder/accessibility/
 4. Toggle **Auto Sync** to upload every 15 minutes when connected
 
 Files appear in Google Drive under a folder matching your local folder's name.
-
----
-
-## Publish to Google Play
-
-See [docs/PLAY_STORE_RELEASE.md](docs/PLAY_STORE_RELEASE.md) for the
-app-specific signing, OAuth, privacy, Data safety, store listing, and testing
-checklist.
 
 ---
 

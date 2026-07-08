@@ -1,3 +1,7 @@
+// Copyright © 2026 Ofir Meguri
+// Licensed under the Apache License, Version 2.0
+// See LICENSE file for details.
+
 package com.ofir.syncfolder
 
 import android.os.Bundle

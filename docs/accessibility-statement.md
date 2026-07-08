@@ -8,7 +8,7 @@ permalink: /accessibility/
 
 Last updated: June 18, 2026
 
-The app publisher aims to make Sync Folder usable by people with disabilities and to
+Ofir Meguri aims to make Sync Folder usable by people with disabilities and to
 improve accessibility as issues are identified.
 
 ## Accessibility measures
@@ -34,8 +34,8 @@ Drive interfaces that are outside the app's control.
 If you encounter an accessibility problem, need information in another format,
 or need assistance using the app, contact:
 
-Sync Folder support
-support@example.com
+Ofir Meguri
+ofirmgr@gmail.com
 
 Please include the device model, Android version, assistive technology used,
 and a short description of the problem when possible. Accessibility inquiries
