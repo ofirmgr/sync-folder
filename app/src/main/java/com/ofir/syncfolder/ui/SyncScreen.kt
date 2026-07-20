@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,7 +34,9 @@ import androidx.credentials.exceptions.GetCredentialException
 import androidx.documentfile.provider.DocumentFile
 import com.ofir.syncfolder.BuildConfig
 import com.ofir.syncfolder.auth.AuthManager
+import com.ofir.syncfolder.sync.SyncWorker
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.text.selection.SelectionContainer
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -49,11 +52,33 @@ fun SyncScreen(viewModel: SyncViewModel) {
     var showBackgroundSyncDialog by remember { mutableStateOf(false) }
     var actionAfterTerms by remember { mutableStateOf(PendingAction.None) }
 
+    // Not used to read files — see the manifest comment. It is what allows JobScheduler
+    // to wake the app on a MediaStore change, which is the near-instant sync path.
+    val mediaPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { viewModel.onMediaPermissionResult() }
+
+    fun requestMediaPermissionIfNeeded() {
+        if (SyncWorker.hasMediaPermission(context)) return
+        mediaPermissionLauncher.launch(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) Manifest.permission.READ_MEDIA_AUDIO
+            else Manifest.permission.READ_EXTERNAL_STORAGE
+        )
+    }
+
+    // Re-checked when the user comes back from Settings; the value cannot change while
+    // this screen is in the foreground.
+    var batteryOptimized by remember { mutableStateOf(viewModel.isBatteryOptimized()) }
+    val batterySettingsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { batteryOptimized = viewModel.isBatteryOptimized() }
+
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
             viewModel.enableAutoSyncAfterConsent()
+            requestMediaPermissionIfNeeded()
         } else {
             scope.launch {
                 snackbarHostState.showSnackbar(
@@ -74,6 +99,7 @@ fun SyncScreen(viewModel: SyncViewModel) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {
             viewModel.enableAutoSyncAfterConsent()
+            requestMediaPermissionIfNeeded()
         }
     }
 
@@ -119,14 +145,15 @@ fun SyncScreen(viewModel: SyncViewModel) {
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(padding)
-                .padding(horizontal = 20.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
-        ) {
+        SelectionContainer {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(padding)
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp)
+            ) {
 
             // ── Account section ──────────────────────────────────────────
             AccountSection(
@@ -178,7 +205,8 @@ fun SyncScreen(viewModel: SyncViewModel) {
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Auto Sync", style = MaterialTheme.typography.bodyLarge)
-                    Text("Upload changes every 15 minutes", style = MaterialTheme.typography.bodySmall,
+                    Text("Upload changes shortly after a new file appears",
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Switch(
@@ -200,6 +228,16 @@ fun SyncScreen(viewModel: SyncViewModel) {
                         }
                     },
                     enabled = state.accountEmail != null && state.folderName != null
+                )
+            }
+
+            if (state.autoSync && batteryOptimized) {
+                BatteryOptimizationWarning(
+                    onFix = {
+                        batterySettingsLauncher.launch(
+                            Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                        )
+                    }
                 )
             }
 
@@ -237,6 +275,7 @@ fun SyncScreen(viewModel: SyncViewModel) {
             )
         }
     }
+}
 
     if (showTermsDialog) {
         TermsConsentDialog(
@@ -269,6 +308,34 @@ fun SyncScreen(viewModel: SyncViewModel) {
     }
 }
 
+/**
+ * Without a battery-optimization exemption, an app the user never opens drops into the
+ * Restricted standby bucket after about a week and background sync collapses to roughly
+ * once a day, with nothing on screen to explain it.
+ */
+@Composable
+private fun BatteryOptimizationWarning(onFix: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            Icons.Default.BatteryAlert,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            "Battery optimization is limiting background sync. Allow unrestricted " +
+                "battery use to keep syncing on time.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        TextButton(onClick = onFix) { Text("Fix") }
+    }
+}
+
 @Composable
 private fun DataUseSection(
     onOpenPrivacyPolicy: (() -> Unit)?,
@@ -284,8 +351,8 @@ private fun DataUseSection(
         Text(
             "Sync Folder reads only the folder you choose and uploads new or changed files " +
                 "directly to your Google Drive. When Auto Sync is enabled, this can happen " +
-                "in the background every 15 minutes. The app has no developer-operated server, " +
-                "advertising, or analytics.",
+                "in the background shortly after a file is added or changed. The app has no " +
+                "developer-operated server, advertising, or analytics.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -328,27 +395,29 @@ private fun TermsConsentDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Before you sync") },
+        title = { SelectionContainer { Text("Before you sync") } },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    "Sync Folder uploads files from the folder you select to Google Drive. " +
-                        "Sync can fail, be delayed, or be incomplete because of device, network, " +
-                        "permission, or Google service issues."
-                )
-                Text(
-                    "This app is not a substitute for an independent backup. Verify important " +
-                        "files in Google Drive and keep another copy."
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(
-                        checked = acknowledged,
-                        onCheckedChange = { acknowledged = it }
+            SelectionContainer {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        "Sync Folder uploads files from the folder you select to Google Drive. " +
+                            "Sync can fail, be delayed, or be incomplete because of device, network, " +
+                            "permission, or Google service issues."
                     )
-                    Text("I understand and accept the Terms of Use.")
-                }
-                if (onOpenTerms != null) {
-                    TextButton(onClick = onOpenTerms) { Text("Read Terms of Use") }
+                    Text(
+                        "This app is not a substitute for an independent backup. Verify important " +
+                            "files in Google Drive and keep another copy."
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = acknowledged,
+                            onCheckedChange = { acknowledged = it }
+                        )
+                        Text("I understand and accept the Terms of Use.")
+                    }
+                    if (onOpenTerms != null) {
+                        TextButton(onClick = onOpenTerms) { Text("Read Terms of Use") }
+                    }
                 }
             }
         },
@@ -370,13 +439,16 @@ private fun BackgroundSyncConsentDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Enable background sync?") },
+        title = { SelectionContainer { Text("Enable background sync?") } },
         text = {
-            Text(
-                "When enabled, Sync Folder may read the selected folder and upload new or " +
-                    "changed files to Google Drive approximately every 15 minutes, including " +
-                    "when you are not actively using the app. Android may delay this work."
-            )
+            SelectionContainer {
+                Text(
+                    "When enabled, Sync Folder may read the selected folder and upload new or " +
+                        "changed files to Google Drive shortly after they appear, and checks at " +
+                        "least every few minutes, including when you are not actively using the " +
+                        "app. Android may delay this work to save battery."
+                )
+            }
         },
         confirmButton = {
             TextButton(onClick = onAccept) { Text("Enable") }

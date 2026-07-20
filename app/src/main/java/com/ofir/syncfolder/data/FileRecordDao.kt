@@ -13,9 +13,15 @@ interface FileRecordDao {
     @Query("SELECT * FROM file_records WHERE relativePath = :path")
     suspend fun findByPath(path: String): FileRecord?
 
+    @Query("SELECT COUNT(*) FROM file_records")
+    suspend fun count(): Int
+
     @Upsert
     suspend fun upsert(record: FileRecord)
 
     @Query("DELETE FROM file_records WHERE relativePath LIKE :prefix || '%'")
     suspend fun deleteByPrefix(prefix: String)
+
+    @Query("DELETE FROM file_records")
+    suspend fun clearAll()
 }

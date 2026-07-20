@@ -19,3 +19,8 @@ build/
 .externalNativeBuild
 .cxx
 app/src/main/res/values/secrets.xml
+
+# SQLite database files
+*.db
+*.db-shm
+*.db-wal

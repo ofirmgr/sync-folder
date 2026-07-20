@@ -5,10 +5,13 @@
 package com.ofir.syncfolder.ui
 
 import android.app.Application
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.PowerManager
 import androidx.activity.result.IntentSenderRequest
 import androidx.credentials.Credential
+import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.*
@@ -21,7 +24,6 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
-import java.util.concurrent.TimeUnit
 
 data class SyncUiState(
     val accountEmail: String? = null,
@@ -63,6 +65,7 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
     private val _events = Channel<UiEvent>(Channel.BUFFERED)
     val events: Flow<UiEvent> = _events.receiveAsFlow()
 
+    private val appContext: Context = app.applicationContext
     private val prefs = Prefs(app)
     private val authManager = AuthManager(app)
     private val wm = WorkManager.getInstance(app)
@@ -70,11 +73,29 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
     init {
         viewModelScope.launch {
             prefs.clearLegacyAccessToken()
+
+            val snap = prefs.snapshot()
+            if (snap.autoSync && snap.backgroundSyncConsent && snap.termsAcceptedVersion >= Prefs.CURRENT_TERMS_VERSION) {
+                SyncWorker.scheduleAll(appContext)
+            }
+
             prefs.data.collect { p ->
                 if (p.autoSync && p.termsAcceptedVersion < Prefs.CURRENT_TERMS_VERSION) {
                     prefs.setAutoSync(false)
-                    wm.cancelUniqueWork(SyncWorker.PERIODIC_WORK_NAME)
+                    SyncWorker.cancelAll(appContext)
                 }
+                val folderAccessMissing = p.treeUri?.let { treeUri ->
+                    val uri = Uri.parse(treeUri)
+                    val grantMissing = appContext.contentResolver.persistedUriPermissions.none { permission ->
+                        permission.isReadPermission && permission.uri == uri
+                    }
+                    val unexpectedlyEmpty = runCatching {
+                        DocumentFile.fromTreeUri(appContext, uri)?.listFiles()?.isEmpty() != false &&
+                            com.ofir.syncfolder.data.AppDb.getInstance(appContext)
+                                .fileRecordDao().count() > 0
+                    }.getOrDefault(true)
+                    grantMissing || unexpectedlyEmpty
+                } ?: false
                 _state.update {
                     it.copy(
                         accountEmail = p.accountEmail,
@@ -85,7 +106,14 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
                         syncFromMs = p.syncFromMs,
                         extensionFilter = p.extensionFilter ?: "",
                         termsAccepted = p.termsAcceptedVersion >= Prefs.CURRENT_TERMS_VERSION,
-                        backgroundSyncConsent = p.backgroundSyncConsent
+                        backgroundSyncConsent = p.backgroundSyncConsent,
+                        status = if (folderAccessMissing) {
+                            SyncUiState.Status.Error(
+                                "Folder access expired — select the folder again"
+                            )
+                        } else {
+                            it.status
+                        }
                     )
                 }
             }
@@ -148,8 +176,18 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setFolder(uri: Uri, displayName: String) {
         viewModelScope.launch {
-            prefs.setTreeUri(uri.toString())
-            prefs.setFolderName(displayName)
+            val snap = prefs.snapshot()
+            if (snap.treeUri != uri.toString()) {
+                prefs.setTreeUri(uri.toString())
+                prefs.setFolderName(displayName)
+                // Clear local sync state when switching folders to avoid the
+                // "listing came back empty" error from the old folder's records.
+                com.ofir.syncfolder.data.AppDb.getInstance(getApplication())
+                    .fileRecordDao().clearAll()
+            }
+            // The user may reselect the same URI to renew a stale persisted grant.
+            _state.update { it.copy(status = SyncUiState.Status.Idle) }
+            if (snap.autoSync) SyncWorker.scheduleAll(appContext)
         }
     }
 
@@ -173,7 +211,7 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             prefs.setAutoSync(enabled)
-            if (enabled) schedulePeriodicSync() else wm.cancelUniqueWork(SyncWorker.PERIODIC_WORK_NAME)
+            if (enabled) SyncWorker.scheduleAll(appContext) else SyncWorker.cancelAll(appContext)
         }
     }
 
@@ -187,12 +225,13 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             prefs.setBackgroundSyncConsent(true)
             prefs.setAutoSync(true)
-            schedulePeriodicSync()
+            SyncWorker.scheduleAll(appContext)
         }
     }
 
     fun syncNow() {
         val work = OneTimeWorkRequestBuilder<SyncWorker>()
+            .setInputData(workDataOf(SyncWorker.KEY_TRIGGER to SyncWorker.TRIGGER_MANUAL))
             .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()
@@ -227,17 +266,28 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
 
     fun signOut() {
         viewModelScope.launch {
-            wm.cancelUniqueWork(SyncWorker.PERIODIC_WORK_NAME)
+            SyncWorker.cancelAll(appContext)
             prefs.clearAccount()
             prefs.setAutoSync(false)
             _state.update { SyncUiState() }
         }
     }
 
-    private fun schedulePeriodicSync() {
-        val work = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES)
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .build()
-        wm.enqueueUniquePeriodicWork(SyncWorker.PERIODIC_WORK_NAME, ExistingPeriodicWorkPolicy.UPDATE, work)
+    /**
+     * The content trigger is only registered when the permission is held, so a late
+     * grant has to re-arm it.
+     */
+    fun onMediaPermissionResult() {
+        if (state.value.autoSync) SyncWorker.scheduleContentTrigger(appContext)
+    }
+
+    /**
+     * True when the OS will let background work run on its normal schedule. Without the
+     * exemption a user who never opens the app drops into the Restricted standby bucket
+     * and sync collapses to roughly once a day, invisibly.
+     */
+    fun isBatteryOptimized(): Boolean {
+        val pm = appContext.getSystemService(PowerManager::class.java)
+        return !pm.isIgnoringBatteryOptimizations(appContext.packageName)
     }
 }

@@ -8,6 +8,16 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
+    <!--
+      Not used to read files — the app reads its folder through SAF. This is what lets
+      JobScheduler deliver a MediaStore content-URI trigger, which is the only way the
+      OS can wake the app when a new file appears while its process is dead.
+    -->
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
     <application
         android:name=".SyncApp"
         android:allowBackup="false"
