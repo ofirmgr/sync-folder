@@ -114,18 +114,18 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         }
 
         val auth = AuthManager(applicationContext)
-        val (token, pendingIntent) = auth.authorizeForDrive()
+        val (token, pendingIntent) = auth.authorizeForDrive(snap.accountEmail)
 
         if (pendingIntent != null) {
             prefs.setNeedsReauth(true)
             showReauthNotification()
             return failure("Re-authentication required")
         }
-        val accessToken = token ?: return failure("Could not get access token")
+        var accessToken = token ?: return failure("Could not get access token")
 
         return try {
             val db = AppDb.getInstance(applicationContext)
-            val result = SyncEngine.sync(
+            suspend fun syncWithCurrentToken() = SyncEngine.sync(
                 context = applicationContext,
                 treeUri = treeUri,
                 accessToken = accessToken,
@@ -135,7 +135,23 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                 syncFromMs = snap.syncFromMs,
                 onProgress = progressReporter(isManual)
             )
+
+            val result = try {
+                syncWithCurrentToken()
+            } catch (_: TokenExpiredException) {
+                // Access tokens are short-lived. Ask Play services for a replacement
+                // before requiring the user to open the app again.
+                val (refreshedToken, refreshedPendingIntent) = auth.authorizeForDrive(snap.accountEmail)
+                if (refreshedPendingIntent != null || refreshedToken == null) {
+                    prefs.setNeedsReauth(true)
+                    showReauthNotification()
+                    return failure("Re-authentication required")
+                }
+                accessToken = refreshedToken
+                syncWithCurrentToken()
+            }
             prefs.setLastSync(System.currentTimeMillis())
+            prefs.setNeedsReauth(false)
             Result.success(workDataOf("uploaded" to result.uploaded, "skipped" to result.skipped))
         } catch (e: TokenExpiredException) {
             prefs.setNeedsReauth(true)

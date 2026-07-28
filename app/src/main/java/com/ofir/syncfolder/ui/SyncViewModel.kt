@@ -136,7 +136,7 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
     fun requestDriveAuth() {
         viewModelScope.launch {
             try {
-                val (token, sender) = authManager.authorizeForDrive()
+                val (token, sender) = authManager.authorizeForDrive(prefs.snapshot().accountEmail)
                 when {
                     token != null -> {
                         prefs.setNeedsReauth(false)

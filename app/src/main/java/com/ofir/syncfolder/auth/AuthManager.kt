@@ -6,6 +6,7 @@ package com.ofir.syncfolder.auth
 
 import android.content.Context
 import android.content.IntentSender
+import android.accounts.Account
 import androidx.credentials.Credential
 import androidx.credentials.GetCredentialRequest
 import com.google.android.gms.auth.api.identity.AuthorizationRequest
@@ -51,10 +52,13 @@ class AuthManager(private val context: Context) {
      * Returns (accessToken, null) if authorized silently, or (null, IntentSender) if UI needed.
      * Call from any context — does not require Activity.
      */
-    suspend fun authorizeForDrive(): Pair<String?, IntentSender?> {
-        val request = AuthorizationRequest.builder()
+    suspend fun authorizeForDrive(accountEmail: String? = null): Pair<String?, IntentSender?> {
+        val builder = AuthorizationRequest.builder()
             .setRequestedScopes(listOf(Scope(DRIVE_FILE_SCOPE)))
-            .build()
+        accountEmail?.takeIf { it.isNotBlank() }?.let {
+            builder.setAccount(Account(it, GOOGLE_ACCOUNT_TYPE))
+        }
+        val request = builder.build()
         val result = authorizationClient.authorize(request).await()
         return if (result.hasResolution()) {
             Pair(null, result.pendingIntent?.intentSender)
@@ -76,5 +80,6 @@ class AuthManager(private val context: Context) {
 
     companion object {
         const val DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+        private const val GOOGLE_ACCOUNT_TYPE = "com.google"
     }
 }
