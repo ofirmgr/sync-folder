@@ -253,6 +253,13 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             scheduleContentTrigger(context)
         }
 
+        /** Restores missing background work without replacing a worker that started the app. */
+        fun ensureScheduled(context: Context) {
+            scheduleChain(context, policy = ExistingWorkPolicy.KEEP)
+            scheduleWatchdog(context)
+            scheduleContentTrigger(context, policy = ExistingWorkPolicy.KEEP)
+        }
+
         fun cancelAll(context: Context) {
             val wm = WorkManager.getInstance(context)
             wm.cancelUniqueWork(CHAIN_WORK_NAME)
