@@ -7,11 +7,27 @@ package com.ofir.syncfolder
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import com.ofir.syncfolder.data.Prefs
+import com.ofir.syncfolder.sync.SyncWorker
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class SyncApp : Application() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        scheduleBackgroundSync()
+    }
+
+    private fun scheduleBackgroundSync() {
+        CoroutineScope(Dispatchers.Default).launch {
+            val prefs = Prefs(this@SyncApp)
+            val snap = prefs.snapshot()
+            if (snap.autoSync && snap.backgroundSyncConsent && snap.termsAcceptedVersion >= Prefs.CURRENT_TERMS_VERSION) {
+                SyncWorker.ensureScheduled(this@SyncApp)
+            }
+        }
     }
 
     private fun createNotificationChannel() {
