@@ -14,7 +14,7 @@ import com.ofir.syncfolder.drive.DriveClient
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-data class SyncResult(val uploaded: Int, val skipped: Int)
+data class SyncResult(val uploaded: Int, val skipped: Int, val failed: Int = 0)
 
 /**
  * Thrown when a folder listing fails or comes back empty in a way that indicates a
@@ -69,6 +69,7 @@ object SyncEngine {
 
         var uploaded = 0
         var skipped = 0
+        var failed = 0
         val dao = db.fileRecordDao()
         // Snapshot of how many records we already have. Used to distinguish a
         // genuinely empty folder from a listing that silently failed.
@@ -172,11 +173,12 @@ object SyncEngine {
                     recurse(entry.documentId, subId, relPath, entry.fallbackDocument)
                 } else {
                     if (extensionFilter.isNotEmpty() && name.substringAfterLast('.', "").lowercase() !in extensionFilter) {
+                        skipped++
                         continue
                     }
                     if (syncFromMs != null && entry.lastModified < syncFromMs) {
                         skipped++
-                        onProgress(name, uploaded + skipped, false)
+                        onProgress(name, uploaded + skipped + failed, false)
                         continue
                     }
                     val existing = dao.findByPath(relPath)
@@ -185,19 +187,29 @@ object SyncEngine {
                         existing.lastModified == entry.lastModified
                     ) {
                         skipped++
-                        onProgress(name, uploaded + skipped, false)
+                        onProgress(name, uploaded + skipped + failed, false)
                         continue
                     }
 
-                    onProgress(name, uploaded + skipped, true)
-                    val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, entry.documentId)
-                    val stream = resolver.openInputStream(docUri) ?: continue
-                    val mime = entry.mime.ifEmpty { "application/octet-stream" }
-                    val driveId = stream.use {
-                        drive.uploadFile(name, driveFolderId, it, mime, entry.size)
+                    try {
+                        onProgress(name, uploaded + skipped + failed, true)
+                        val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, entry.documentId)
+                        val stream = resolver.openInputStream(docUri)
+                        if (stream == null) {
+                            android.util.Log.e("SyncEngine", "Failed to open input stream for $name ($relPath)")
+                            failed++
+                            continue
+                        }
+                        val mime = entry.mime.ifEmpty { "application/octet-stream" }
+                        val driveId = stream.use {
+                            drive.uploadFile(name, driveFolderId, it, mime, entry.size, entry.lastModified)
+                        }
+                        dao.upsert(FileRecord(relPath, entry.size, entry.lastModified, driveId))
+                        uploaded++
+                    } catch (e: Exception) {
+                        android.util.Log.e("SyncEngine", "Failed to upload file $name ($relPath)", e)
+                        failed++
                     }
-                    dao.upsert(FileRecord(relPath, entry.size, entry.lastModified, driveId))
-                    uploaded++
                 }
             }
         }
@@ -209,10 +221,10 @@ object SyncEngine {
         // Fail-loud guard: if we have synced files before but this run enumerated
         // nothing at all, the listing almost certainly failed silently. Do not mark
         // the run successful (which would advance last_sync and hide the problem).
-        if (uploaded == 0 && skipped == 0 && existingCount > 0) {
+        if (uploaded == 0 && skipped == 0 && failed == 0 && existingCount > 0) {
             throw FolderListingException("Folder listing came back empty despite $existingCount existing records")
         }
 
-        SyncResult(uploaded, skipped)
+        SyncResult(uploaded, skipped, failed)
     }
 }

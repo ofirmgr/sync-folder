@@ -25,7 +25,7 @@ class SyncApp : Application() {
             val prefs = Prefs(this@SyncApp)
             val snap = prefs.snapshot()
             if (snap.autoSync && snap.backgroundSyncConsent && snap.termsAcceptedVersion >= Prefs.CURRENT_TERMS_VERSION) {
-                SyncWorker.ensureScheduled(this@SyncApp)
+                SyncWorker.scheduleAll(this@SyncApp)
             }
         }
     }

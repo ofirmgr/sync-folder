@@ -43,7 +43,7 @@ data class SyncUiState(
         object Idle : Status()
         object SigningIn : Status()
         object Syncing : Status()
-        data class Done(val uploaded: Int, val skipped: Int) : Status()
+        data class Done(val uploaded: Int, val skipped: Int, val failed: Int = 0) : Status()
         data class Error(val message: String) : Status()
     }
 
@@ -252,7 +252,8 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
                     WorkInfo.State.SUCCEEDED -> {
                         val uploaded = info.outputData.getInt("uploaded", 0)
                         val skipped = info.outputData.getInt("skipped", 0)
-                        _state.update { it.copy(status = SyncUiState.Status.Done(uploaded, skipped)) }
+                        val failed = info.outputData.getInt("failed", 0)
+                        _state.update { it.copy(status = SyncUiState.Status.Done(uploaded, skipped, failed)) }
                     }
                     WorkInfo.State.FAILED -> {
                         val err = info.outputData.getString("error") ?: "Sync failed"

@@ -18,6 +18,8 @@ import org.json.JSONObject
 import java.io.IOException
 import java.io.InputStream
 import java.net.URLEncoder
+import java.time.Instant
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
 
 class TokenExpiredException : IOException("Access token expired")
@@ -58,7 +60,8 @@ class DriveClient(private val accessToken: String) {
         parentId: String,
         stream: InputStream,
         mimeType: String,
-        contentLength: Long
+        contentLength: Long,
+        lastModifiedMs: Long
     ): String {
         // Check if file already exists to decide create vs update
         val escaped = name.replace("\\", "\\\\").replace("'", "\\'")
@@ -68,7 +71,15 @@ class DriveClient(private val accessToken: String) {
 
         val meta = JSONObject().apply {
             put("name", name)
-            if (existing.length() == 0) put("parents", JSONArray().apply { put(parentId) })
+            if (existing.length() == 0) {
+                put("parents", JSONArray().apply { put(parentId) })
+                // createdTime is only settable at creation time; leave it alone on
+                // update so re-uploads don't rewrite the original Drive create date.
+                if (lastModifiedMs > 0) put("createdTime", formatRfc3339(lastModifiedMs))
+            }
+            // modifiedTime reflects the local file's last-modified time so Drive
+            // sorting/dates match the source instead of the upload moment.
+            if (lastModifiedMs > 0) put("modifiedTime", formatRfc3339(lastModifiedMs))
         }
 
         return if (existing.length() > 0) {
@@ -92,6 +103,9 @@ class DriveClient(private val accessToken: String) {
                 .getString("id")
         }
     }
+
+    private fun formatRfc3339(epochMs: Long): String =
+        DateTimeFormatter.ISO_INSTANT.format(Instant.ofEpochMilli(epochMs))
 
     private suspend fun get(url: String): JSONObject = withContext(Dispatchers.IO) {
         val req = Request.Builder().url(url).header("Authorization", "Bearer $accessToken").build()

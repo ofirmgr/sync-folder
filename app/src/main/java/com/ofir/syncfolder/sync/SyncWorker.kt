@@ -32,16 +32,19 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
 
     override suspend fun doWork(): Result {
         val trigger = inputData.getString(KEY_TRIGGER) ?: TRIGGER_MANUAL
+        android.util.Log.i("SyncWorker", "doWork starting. trigger=$trigger, attempt=$runAttemptCount")
         val prefs = Prefs(applicationContext)
         val snap = prefs.snapshot()
 
         if (trigger != TRIGGER_MANUAL && !snap.autoSync) {
             // Auto-sync is off. This is the only exit path allowed to end the chain
             // without re-arming it.
+            android.util.Log.i("SyncWorker", "autoSync is off, exiting without rearm")
             return Result.success()
         }
 
         val result = runSync(prefs, snap, trigger)
+        android.util.Log.i("SyncWorker", "runSync finished with result=$result")
 
         // Every other exit path must re-arm, or auto-sync stops permanently. Retry is
         // excluded: WorkManager keeps the same unique work alive for the retry, and
@@ -152,7 +155,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             }
             prefs.setLastSync(System.currentTimeMillis())
             prefs.setNeedsReauth(false)
-            Result.success(workDataOf("uploaded" to result.uploaded, "skipped" to result.skipped))
+            Result.success(workDataOf("uploaded" to result.uploaded, "skipped" to result.skipped, "failed" to result.failed))
         } catch (e: TokenExpiredException) {
             prefs.setNeedsReauth(true)
             showReauthNotification()
@@ -164,6 +167,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             if (runAttemptCount < MAX_LISTING_RETRIES) Result.retry()
             else failure("Could not read folder contents — try again")
         } catch (e: Exception) {
+            android.util.Log.e("SyncWorker", "Sync exception occurred: ${e.message}", e)
             failure(e.message ?: "Sync failed")
         }
     }
@@ -229,11 +233,10 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         const val TRIGGER_CONTENT = "content"
 
         /**
-         * How long the chain waits between runs. Deliberately not 1 minute: Android 16+
-         * caps job execution at 20 minutes per rolling hour in the ACTIVE bucket, and a
-         * run enumerates the whole folder. 5 minutes leaves roughly 20x headroom.
+         * How long the chain waits between runs. Increased to 15 minutes to reduce job
+         * queue pressure and comply with Android 16+ active bucket execution caps.
          */
-        const val SYNC_INTERVAL_MINUTES = 5L
+        const val SYNC_INTERVAL_MINUTES = 15L
 
         /** Debounce for the content trigger, so a burst of new files is one run. */
         private const val TRIGGER_DELAY_SECONDS = 10L
@@ -251,13 +254,32 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             scheduleChain(context)
             scheduleWatchdog(context)
             scheduleContentTrigger(context)
+            SyncAlarmScheduler.schedule(context)
+            try {
+                SyncForegroundService.start(context)
+            } catch (e: Exception) {
+                android.util.Log.e("SyncWorker", "Failed to start SyncForegroundService in scheduleAll", e)
+            }
         }
 
         /** Restores missing background work without replacing a worker that started the app. */
         fun ensureScheduled(context: Context) {
-            scheduleChain(context, policy = ExistingWorkPolicy.KEEP)
+            val wm = WorkManager.getInstance(context)
+            val chainStale = runCatching {
+                val infos = wm.getWorkInfosForUniqueWork(CHAIN_WORK_NAME).get()
+                infos.isEmpty() || infos.all { it.state.isFinished } ||
+                    infos.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.BLOCKED }
+            }.getOrDefault(true)
+
+            scheduleChain(context, policy = if (chainStale) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP)
             scheduleWatchdog(context)
-            scheduleContentTrigger(context, policy = ExistingWorkPolicy.KEEP)
+            scheduleContentTrigger(context, policy = if (chainStale) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP)
+            SyncAlarmScheduler.schedule(context)
+            try {
+                SyncForegroundService.start(context)
+            } catch (e: Exception) {
+                android.util.Log.e("SyncWorker", "Failed to start SyncForegroundService in ensureScheduled", e)
+            }
         }
 
         fun cancelAll(context: Context) {
@@ -265,6 +287,12 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             wm.cancelUniqueWork(CHAIN_WORK_NAME)
             wm.cancelUniqueWork(PERIODIC_WORK_NAME)
             wm.cancelUniqueWork(CONTENT_WORK_NAME)
+            SyncAlarmScheduler.cancel(context)
+            try {
+                SyncForegroundService.stop(context)
+            } catch (e: Exception) {
+                android.util.Log.e("SyncWorker", "Failed to stop SyncForegroundService in cancelAll", e)
+            }
         }
 
         /**
@@ -277,6 +305,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             delayMinutes: Long = SYNC_INTERVAL_MINUTES,
             policy: ExistingWorkPolicy = ExistingWorkPolicy.REPLACE
         ) {
+            android.util.Log.i("SyncWorker", "scheduleChain with delay=$delayMinutes mins, policy=$policy")
             val work = OneTimeWorkRequestBuilder<SyncWorker>()
                 .setInputData(workDataOf(KEY_TRIGGER to TRIGGER_CHAIN))
                 .setInitialDelay(delayMinutes, TimeUnit.MINUTES)
@@ -286,6 +315,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         }
 
         fun scheduleWatchdog(context: Context) {
+            android.util.Log.i("SyncWorker", "scheduleWatchdog")
             val work = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES)
                 .setInputData(workDataOf(KEY_TRIGGER to TRIGGER_WATCHDOG))
                 .setConstraints(networkConstraints().build())
@@ -307,6 +337,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             policy: ExistingWorkPolicy = ExistingWorkPolicy.REPLACE
         ) {
             if (!hasMediaPermission(context)) return
+            android.util.Log.i("SyncWorker", "scheduleContentTrigger with policy=$policy")
             val constraints = networkConstraints()
                 .addContentUriTrigger(MediaStore.Files.getContentUri("external"), true)
                 .setTriggerContentUpdateDelay(TRIGGER_DELAY_SECONDS, TimeUnit.SECONDS)

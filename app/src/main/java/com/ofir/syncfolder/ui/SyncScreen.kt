@@ -241,6 +241,12 @@ fun SyncScreen(viewModel: SyncViewModel) {
                 )
             }
 
+            if (state.autoSync && isXiaomiDevice()) {
+                AutostartWarning(
+                    onOpenAutostart = { openAutostartSettings(context) }
+                )
+            }
+
             HorizontalDivider()
 
             // ── Sync now button ──────────────────────────────────────────
@@ -313,6 +319,49 @@ fun SyncScreen(viewModel: SyncViewModel) {
  * Restricted standby bucket after about a week and background sync collapses to roughly
  * once a day, with nothing on screen to explain it.
  */
+private fun isXiaomiDevice(): Boolean {
+    val m = Build.MANUFACTURER.orEmpty().lowercase()
+    return m.contains("xiaomi") || m.contains("redmi") || m.contains("poco")
+}
+
+private fun openAutostartSettings(context: android.content.Context) {
+    try {
+        val intent = Intent().apply {
+            setClassName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity")
+        }
+        context.startActivity(intent)
+    } catch (_: Exception) {
+        try {
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.fromParts("package", context.packageName, null)
+            }
+            context.startActivity(intent)
+        } catch (_: Exception) {}
+    }
+}
+
+@Composable
+private fun AutostartWarning(onOpenAutostart: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            Icons.Default.Settings,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            "MIUI Autostart: Allow Autostart in Xiaomi security settings so background sync isn't stopped.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        TextButton(onClick = onOpenAutostart) { Text("Autostart") }
+    }
+}
+
 @Composable
 private fun BatteryOptimizationWarning(onFix: () -> Unit) {
     Row(
@@ -604,7 +653,12 @@ private fun StatusSection(state: SyncUiState) {
                 }
             }
             is SyncUiState.Status.Done -> {
-                Text("✓ Done — ${s.uploaded} uploaded, ${s.skipped} skipped",
+                val doneText = if (s.failed > 0) {
+                    "✓ Done — ${s.uploaded} uploaded, ${s.skipped} skipped, ${s.failed} failed"
+                } else {
+                    "✓ Done — ${s.uploaded} uploaded, ${s.skipped} skipped"
+                }
+                Text(doneText,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary)
             }
