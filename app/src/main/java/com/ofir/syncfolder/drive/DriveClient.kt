@@ -24,6 +24,9 @@ import java.util.concurrent.TimeUnit
 
 class TokenExpiredException : IOException("Access token expired")
 
+/** A Drive file ID no longer resolves — it was deleted or moved out of reach. */
+class FileNotFoundOnDriveException(fileId: String) : IOException("Drive file $fileId not found")
+
 class DriveClient(private val accessToken: String) {
 
     private val http = OkHttpClient.Builder()
@@ -54,6 +57,10 @@ class DriveClient(private val accessToken: String) {
     /**
      * Uploads a file via multipart upload and returns the Drive file ID.
      * If a file with the same name already exists under parentId, it is updated.
+     *
+     * Pass [knownFileId] when the caller already tracks the Drive ID to skip the
+     * name lookup — one round-trip per upload instead of two. A stale ID (the file
+     * was removed in Drive) falls back to creating it again.
      */
     suspend fun uploadFile(
         name: String,
@@ -61,17 +68,14 @@ class DriveClient(private val accessToken: String) {
         stream: InputStream,
         mimeType: String,
         contentLength: Long,
-        lastModifiedMs: Long
+        lastModifiedMs: Long,
+        knownFileId: String? = null
     ): String {
-        // Check if file already exists to decide create vs update
-        val escaped = name.replace("\\", "\\\\").replace("'", "\\'")
-        val q = "name='$escaped' and '$parentId' in parents and trashed=false"
-        val existing = get("$BASE/files?q=${URLEncoder.encode(q, "UTF-8")}&fields=files(id)")
-            .getJSONArray("files")
+        val existingId = knownFileId ?: findFileId(name, parentId)
 
-        val meta = JSONObject().apply {
+        fun meta(isCreate: Boolean) = JSONObject().apply {
             put("name", name)
-            if (existing.length() == 0) {
+            if (isCreate) {
                 put("parents", JSONArray().apply { put(parentId) })
                 // createdTime is only settable at creation time; leave it alone on
                 // update so re-uploads don't rewrite the original Drive create date.
@@ -82,25 +86,66 @@ class DriveClient(private val accessToken: String) {
             if (lastModifiedMs > 0) put("modifiedTime", formatRfc3339(lastModifiedMs))
         }
 
-        return if (existing.length() > 0) {
-            val fileId = existing.getJSONObject(0).getString("id")
-            patchMultipart(
-                "$UPLOAD_BASE/files/$fileId?uploadType=multipart&fields=id",
-                meta.toString(),
-                mimeType,
-                stream,
-                contentLength
-            )
-                .getString("id")
-        } else {
-            postMultipart(
-                "$UPLOAD_BASE/files?uploadType=multipart&fields=id",
-                meta.toString(),
-                mimeType,
-                stream,
-                contentLength
-            )
-                .getString("id")
+        if (existingId != null) {
+            try {
+                return patchMultipart(
+                    "$UPLOAD_BASE/files/$existingId?uploadType=multipart&fields=id",
+                    meta(isCreate = false).toString(),
+                    mimeType,
+                    stream,
+                    contentLength
+                ).getString("id")
+            } catch (e: FileNotFoundOnDriveException) {
+                // Only reachable with a caller-supplied ID; the stream has not been
+                // consumed because the request failed before the body was written.
+                if (knownFileId == null) throw e
+            }
+        }
+
+        return postMultipart(
+            "$UPLOAD_BASE/files?uploadType=multipart&fields=id",
+            meta(isCreate = true).toString(),
+            mimeType,
+            stream,
+            contentLength
+        ).getString("id")
+    }
+
+    /** Returns the ID of a non-trashed file named [name] under [parentId], or null. */
+    suspend fun findFileId(name: String, parentId: String): String? {
+        val escaped = name.replace("\\", "\\\\").replace("'", "\\'")
+        val q = "name='$escaped' and '$parentId' in parents and trashed=false"
+        val files = get("$BASE/files?q=${URLEncoder.encode(q, "UTF-8")}&fields=files(id)")
+            .getJSONArray("files")
+        return if (files.length() > 0) files.getJSONObject(0).getString("id") else null
+    }
+
+    /** Returns (id, name) for every non-trashed file directly under [parentId]. */
+    suspend fun listChildren(parentId: String): List<Pair<String, String>> {
+        val q = "'$parentId' in parents and trashed=false"
+        val encoded = URLEncoder.encode(q, "UTF-8")
+        val out = mutableListOf<Pair<String, String>>()
+        var pageToken: String? = null
+        do {
+            val page = StringBuilder("$BASE/files?q=$encoded&fields=nextPageToken,files(id,name)&pageSize=1000")
+            pageToken?.let { page.append("&pageToken=").append(URLEncoder.encode(it, "UTF-8")) }
+            val body = get(page.toString())
+            val files = body.getJSONArray("files")
+            for (i in 0 until files.length()) {
+                val file = files.getJSONObject(i)
+                out += file.getString("id") to file.getString("name")
+            }
+            pageToken = body.optString("nextPageToken").takeIf { it.isNotEmpty() }
+        } while (pageToken != null)
+        return out
+    }
+
+    /** Moves a file to the Drive trash. Already-missing files are treated as done. */
+    suspend fun trashFile(fileId: String) {
+        try {
+            patchJson("$BASE/files/$fileId?fields=id", JSONObject().put("trashed", true).toString())
+        } catch (e: FileNotFoundOnDriveException) {
+            // Nothing to trash.
         }
     }
 
@@ -113,6 +158,20 @@ class DriveClient(private val accessToken: String) {
         val body = resp.body?.string() ?: "{}"
         if (resp.code == 401) throw TokenExpiredException()
         if (!resp.isSuccessful) throw IOException("GET $url → ${resp.code}: $body")
+        JSONObject(body)
+    }
+
+    private suspend fun patchJson(url: String, json: String): JSONObject = withContext(Dispatchers.IO) {
+        val req = Request.Builder()
+            .url(url)
+            .patch(json.toRequestBody("application/json; charset=utf-8".toMediaType()))
+            .header("Authorization", "Bearer $accessToken")
+            .build()
+        val resp = http.newCall(req).execute()
+        val body = resp.body?.string() ?: "{}"
+        if (resp.code == 401) throw TokenExpiredException()
+        if (resp.code == 404) throw FileNotFoundOnDriveException(url.substringAfterLast('/').substringBefore('?'))
+        if (!resp.isSuccessful) throw IOException("PATCH $url → ${resp.code}: $body")
         JSONObject(body)
     }
 
@@ -182,6 +241,7 @@ class DriveClient(private val accessToken: String) {
         val resp = http.newCall(req).execute()
         val respBody = resp.body?.string() ?: "{}"
         if (resp.code == 401) throw TokenExpiredException()
+        if (resp.code == 404) throw FileNotFoundOnDriveException(url.substringAfterLast('/').substringBefore('?'))
         if (!resp.isSuccessful) throw IOException("$method $url → ${resp.code}: $respBody")
         JSONObject(respBody)
     }

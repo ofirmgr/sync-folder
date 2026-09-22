@@ -24,7 +24,19 @@ data class PrefsData(
     val syncFromMs: Long? = null,
     val extensionFilter: String? = null,
     val termsAcceptedVersion: Int = 0,
+    val smsSync: Boolean = false,
     val backgroundSyncConsent: Boolean = false
+)
+
+/**
+ * What has already been backed up for one calendar month. [count] and [maxMessageId]
+ * form a cheap fingerprint: if either differs from the provider's current view of
+ * that month, the month is rebuilt and re-uploaded.
+ */
+data class SmsMonthState(
+    val fileId: String,
+    val count: Int,
+    val maxMessageId: Long
 )
 
 class Prefs(context: Context) {
@@ -32,6 +44,7 @@ class Prefs(context: Context) {
 
     val data: Flow<PrefsData> = ds.data.map { p ->
         PrefsData(
+            smsSync = p[KEY_SMS_SYNC] ?: false,
             accountEmail = p[KEY_EMAIL],
             treeUri = p[KEY_TREE_URI],
             folderName = p[KEY_FOLDER_NAME],
@@ -46,6 +59,39 @@ class Prefs(context: Context) {
     }
 
     suspend fun snapshot(): PrefsData = data.first()
+
+    suspend fun setSmsSync(enabled: Boolean) = ds.edit { it[KEY_SMS_SYNC] = enabled }
+
+    suspend fun smsBackupId(): String {
+        val values = ds.edit {
+            if (it[KEY_SMS_BACKUP_ID] == null) it[KEY_SMS_BACKUP_ID] = java.util.UUID.randomUUID().toString()
+        }
+        return requireNotNull(values[KEY_SMS_BACKUP_ID])
+    }
+
+    /**
+     * Per-month backup state, keyed by "YYYY-MM". Each value records the Drive file
+     * ID plus a fingerprint of the messages already uploaded for that month, so a
+     * run only re-uploads months that actually changed and a cancelled run keeps
+     * every month it finished.
+     */
+    suspend fun smsMonthState(): Map<String, SmsMonthState> =
+        parseMonthState(ds.data.first()[KEY_SMS_MONTH_STATE])
+
+    suspend fun putSmsMonthState(month: String, state: SmsMonthState) {
+        ds.edit { prefs ->
+            val merged = parseMonthState(prefs[KEY_SMS_MONTH_STATE]).toMutableMap()
+            merged[month] = state
+            prefs[KEY_SMS_MONTH_STATE] = serializeMonthState(merged)
+        }
+    }
+
+    suspend fun clearSmsMonthState() = ds.edit { it.remove(KEY_SMS_MONTH_STATE) }
+
+    suspend fun smsLegacyFilesCleaned(): Boolean = ds.data.first()[KEY_SMS_LEGACY_CLEANED] ?: false
+
+    suspend fun setSmsLegacyFilesCleaned(cleaned: Boolean) =
+        ds.edit { it[KEY_SMS_LEGACY_CLEANED] = cleaned }
 
     suspend fun setAccountEmail(email: String) = ds.edit { it[KEY_EMAIL] = email }
     suspend fun setTreeUri(uri: String) = ds.edit { it[KEY_TREE_URI] = uri }
@@ -64,11 +110,50 @@ class Prefs(context: Context) {
         ds.edit { it[KEY_BACKGROUND_SYNC_CONSENT] = accepted }
     suspend fun clearAccount() = ds.edit {
         it.remove(KEY_EMAIL); it.remove(KEY_TOKEN); it.remove(KEY_NEEDS_REAUTH)
+        it.remove(KEY_SMS_SYNC)
+        // The per-month Drive file IDs belong to the old account's Drive, so the
+        // next account re-backfills instead of patching files it cannot see.
+        it.remove(KEY_SMS_MONTH_STATE); it.remove(KEY_SMS_LEGACY_CLEANED)
     }
     suspend fun clearLegacyAccessToken() = ds.edit { it.remove(KEY_TOKEN) }
 
     companion object {
+        // Preserve existing folder-sync consent; SMS has its own explicit opt-in disclosure.
         const val CURRENT_TERMS_VERSION = 1
+
+        private val KEY_SMS_SYNC = booleanPreferencesKey("sms_sync")
+        private val KEY_SMS_BACKUP_ID = stringPreferencesKey("sms_backup_id")
+        private val KEY_SMS_MONTH_STATE = stringPreferencesKey("sms_month_state")
+        private val KEY_SMS_LEGACY_CLEANED = booleanPreferencesKey("sms_legacy_cleaned")
+
+        internal fun parseMonthState(raw: String?): Map<String, SmsMonthState> {
+            if (raw.isNullOrBlank()) return emptyMap()
+            return runCatching {
+                val json = org.json.JSONObject(raw)
+                json.keys().asSequence().associateWith { key ->
+                    val entry = json.getJSONObject(key)
+                    SmsMonthState(
+                        fileId = entry.getString("id"),
+                        count = entry.getInt("n"),
+                        maxMessageId = entry.getLong("max")
+                    )
+                }
+            }.getOrDefault(emptyMap())
+        }
+
+        internal fun serializeMonthState(state: Map<String, SmsMonthState>): String {
+            val json = org.json.JSONObject()
+            state.forEach { (month, value) ->
+                json.put(
+                    month,
+                    org.json.JSONObject()
+                        .put("id", value.fileId)
+                        .put("n", value.count)
+                        .put("max", value.maxMessageId)
+                )
+            }
+            return json.toString()
+        }
 
         private val KEY_EMAIL = stringPreferencesKey("email")
         private val KEY_TOKEN = stringPreferencesKey("access_token")

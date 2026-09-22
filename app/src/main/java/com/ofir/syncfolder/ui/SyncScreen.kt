@@ -24,6 +24,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -48,6 +49,10 @@ fun SyncScreen(viewModel: SyncViewModel) {
 
     val credentialManager = remember { CredentialManager.create(context) }
     val authManager = remember { AuthManager(context) }
+    var showSmsDialog by remember { mutableStateOf(false) }
+    val smsPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { viewModel.setSmsSync(true) }
     var showTermsDialog by remember { mutableStateOf(false) }
     var showBackgroundSyncDialog by remember { mutableStateOf(false) }
     var actionAfterTerms by remember { mutableStateOf(PendingAction.None) }
@@ -59,7 +64,7 @@ fun SyncScreen(viewModel: SyncViewModel) {
     ) { viewModel.onMediaPermissionResult() }
 
     fun requestMediaPermissionIfNeeded() {
-        if (SyncWorker.hasMediaPermission(context)) return
+        if (state.folderName == null || SyncWorker.hasMediaPermission(context)) return
         mediaPermissionLauncher.launch(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) Manifest.permission.READ_MEDIA_AUDIO
             else Manifest.permission.READ_EXTERNAL_STORAGE
@@ -198,6 +203,19 @@ fun SyncScreen(viewModel: SyncViewModel) {
 
             HorizontalDivider()
 
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Back up all SMS", style = MaterialTheme.typography.bodyLarge)
+                    Text("Save SMS to Google Drive / Sync Folder SMS. No folder selection needed.",
+                        style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(
+                    modifier = Modifier.semantics { contentDescription = "Back up all SMS" },
+                    checked = state.smsSync,
+                    onCheckedChange = { if (it) showSmsDialog = true else viewModel.setSmsSync(false) }
+                )
+            }
+
             // ── Auto-sync toggle ─────────────────────────────────────────
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -205,7 +223,7 @@ fun SyncScreen(viewModel: SyncViewModel) {
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Auto Sync", style = MaterialTheme.typography.bodyLarge)
-                    Text("Upload changes shortly after a new file appears",
+                    Text("Check files and enabled SMS backup about every 15 minutes",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -227,7 +245,7 @@ fun SyncScreen(viewModel: SyncViewModel) {
                             }
                         }
                     },
-                    enabled = state.accountEmail != null && state.folderName != null
+                    enabled = state.accountEmail != null && (state.folderName != null || state.smsSync)
                 )
             }
 
@@ -261,7 +279,7 @@ fun SyncScreen(viewModel: SyncViewModel) {
                 },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = state.accountEmail != null &&
-                        state.folderName != null &&
+                        (state.folderName != null || state.smsSync) &&
                         state.status !is SyncUiState.Status.Syncing
             ) {
                 Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
@@ -282,6 +300,35 @@ fun SyncScreen(viewModel: SyncViewModel) {
         }
     }
 }
+
+    if (showSmsDialog) {
+        AlertDialog(
+            onDismissRequest = { showSmsDialog = false },
+            title = { Text("Back up SMS to Google Drive?") },
+            text = {
+                Text(
+                    "Sync Folder will read all available SMS, including message text, phone numbers, " +
+                        "dates, and status, and upload them directly to your signed-in Google Drive account. " +
+                        "Auto Sync also uploads while the app is closed. Each SMS is saved in its own " +
+                        "JSON file and updated on later syncs. Messages deleted from the phone remain " +
+                        "in Drive. MMS and RCS are not included. You can turn this off at any " +
+                        "time; existing Drive backups remain.",
+                    modifier = Modifier.verticalScroll(rememberScrollState())
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showSmsDialog = false
+                    if (com.ofir.syncfolder.sync.SmsSyncEngine.hasPermission(context)) {
+                        viewModel.setSmsSync(true)
+                    } else {
+                        smsPermissionLauncher.launch(Manifest.permission.READ_SMS)
+                    }
+                }) { Text("Allow SMS backup") }
+            },
+            dismissButton = { TextButton(onClick = { showSmsDialog = false }) { Text("Cancel") } }
+        )
+    }
 
     if (showTermsDialog) {
         TermsConsentDialog(
@@ -398,9 +445,9 @@ private fun DataUseSection(
             color = MaterialTheme.colorScheme.primary
         )
         Text(
-            "Sync Folder reads only the folder you choose and uploads new or changed files " +
+            "Sync Folder reads the folder you choose and, if enabled, all available SMS. It uploads files and monthly SMS backup files " +
                 "directly to your Google Drive. When Auto Sync is enabled, this can happen " +
-                "in the background shortly after a file is added or changed. The app has no " +
+                "in the background. Enabled SMS backup runs with each automatic sync, subject to Android delays. The app has no " +
                 "developer-operated server, advertising, or analytics.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -449,7 +496,7 @@ private fun TermsConsentDialog(
             SelectionContainer {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        "Sync Folder uploads files from the folder you select to Google Drive. " +
+                        "Sync Folder uploads selected files and, if enabled, individual SMS backup files to Google Drive. " +
                             "Sync can fail, be delayed, or be incomplete because of device, network, " +
                             "permission, or Google service issues."
                     )
@@ -492,9 +539,9 @@ private fun BackgroundSyncConsentDialog(
         text = {
             SelectionContainer {
                 Text(
-                    "When enabled, Sync Folder may read the selected folder and upload new or " +
-                        "changed files to Google Drive shortly after they appear, and checks at " +
-                        "least every few minutes, including when you are not actively using the " +
+                    "When enabled, Sync Folder may read the selected folder and enabled SMS backup " +
+                        "and upload them to Google Drive. It checks about every 15 minutes, " +
+                        "including when you are not actively using the " +
                         "app. Android may delay this work to save battery."
                 )
             }

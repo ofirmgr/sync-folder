@@ -6,7 +6,7 @@ permalink: /terms/
 
 # Sync Folder Terms of Use
 
-Last updated: June 18, 2026
+Last updated: September 20, 2026
 
 These Terms of Use govern use of the Sync Folder Android application published
 by Ofir Meguri. By accepting these terms or using the synchronization feature,
@@ -16,8 +16,15 @@ the user agrees to them.
 
 Sync Folder provides one-way uploads of new or changed files from a folder the
 user selects on an Android device to a folder in the user's Google Drive.
-Synchronization can be initiated manually or, if separately enabled by the
-user, approximately every 15 minutes in the background.
+If separately enabled with SMS permission, the app also uploads each SMS
+available through Android, grouped into one file per calendar month. Later syncs
+update the file for any month whose messages changed. Messages deleted from the
+phone, and files written by earlier versions of the app, remain in Drive until
+manually deleted. MMS, RCS, and message restoration are not supported.
+Synchronization can be initiated manually or, if separately enabled by the user,
+approximately every 15 minutes in the background for folder files and enabled SMS
+backup. SMS backup runs in a separate worker on each automatic sync; a pending or
+running backup continues without being restarted.
 
 The app does not provide two-way synchronization. It does not delete local
 files or automatically restore files from Google Drive.

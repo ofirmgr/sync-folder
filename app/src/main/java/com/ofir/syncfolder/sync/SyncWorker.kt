@@ -43,24 +43,36 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             return Result.success()
         }
 
+        // Trigger SMS before folder validation or I/O, including SMS-only setups.
+        // Unique KEEP work preserves any backup already running or waiting to retry.
+        if (trigger != TRIGGER_MANUAL && snap.smsSync) {
+            SmsSyncWorker.enqueueAutoSync(applicationContext)
+        }
+
         val result = runSync(prefs, snap, trigger)
         android.util.Log.i("SyncWorker", "runSync finished with result=$result")
 
         // Every other exit path must re-arm, or auto-sync stops permanently. Retry is
         // excluded: WorkManager keeps the same unique work alive for the retry, and
         // re-enqueueing with REPLACE here would cancel it.
-        if (result is Result.Retry) return result
+        if (result is SyncOutcome.Retry) return Result.retry()
 
         rearm(trigger)
 
-        // A background sync failure belongs to this run, not to the scheduling
-        // chain. APPEND_OR_REPLACE links the next request to this one, so returning
-        // FAILURE would cancel the appended request and permanently stop auto-sync.
-        return if (trigger != TRIGGER_MANUAL && result is Result.Failure) {
-            Result.success(result.outputData)
-        } else {
-            result
+        // A failed background run must not cancel the appended scheduling chain.
+        return when (result) {
+            is SyncOutcome.Complete -> Result.success(result.output)
+            is SyncOutcome.Failed -> if (trigger == TRIGGER_MANUAL) {
+                Result.failure(result.output)
+            } else Result.success(result.output)
+            SyncOutcome.Retry -> Result.retry()
         }
+    }
+
+    private sealed class SyncOutcome {
+        data class Complete(val output: Data) : SyncOutcome()
+        data class Failed(val output: Data) : SyncOutcome()
+        data object Retry : SyncOutcome()
     }
 
     /** Re-enqueues the one-shot request that fired this run, if it was a one-shot. */
@@ -87,8 +99,9 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         }
     }
 
-    private suspend fun runSync(prefs: Prefs, snap: PrefsData, trigger: String): Result {
+    private suspend fun runSync(prefs: Prefs, snap: PrefsData, trigger: String): SyncOutcome {
         val isManual = trigger == TRIGGER_MANUAL
+        if (snap.accountEmail.isNullOrBlank()) return failure("Sign in to Google before syncing")
 
         if (snap.termsAcceptedVersion < Prefs.CURRENT_TERMS_VERSION) {
             return failure("Open the app and accept the current Terms of Use")
@@ -97,6 +110,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             return failure("Open the app and approve background sync")
         }
 
+        // SMS backup has its own worker; this one only handles the folder.
         val treeUriStr = snap.treeUri ?: return failure("No folder selected")
         val treeUri = Uri.parse(treeUriStr)
         val hasPersistedReadAccess = applicationContext.contentResolver.persistedUriPermissions.any {
@@ -155,7 +169,9 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             }
             prefs.setLastSync(System.currentTimeMillis())
             prefs.setNeedsReauth(false)
-            Result.success(workDataOf("uploaded" to result.uploaded, "skipped" to result.skipped, "failed" to result.failed))
+            SyncOutcome.Complete(workDataOf("uploaded" to result.uploaded, "skipped" to result.skipped, "failed" to result.failed))
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: TokenExpiredException) {
             prefs.setNeedsReauth(true)
             showReauthNotification()
@@ -164,7 +180,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             android.util.Log.e("SyncWorker", "Folder listing failed: ${e.message}", e)
             // Transient SAF/provider listing failure. Retry with backoff instead of
             // reporting a false success that would advance last_sync.
-            if (runAttemptCount < MAX_LISTING_RETRIES) Result.retry()
+            if (runAttemptCount < MAX_LISTING_RETRIES) SyncOutcome.Retry
             else failure("Could not read folder contents — try again")
         } catch (e: Exception) {
             android.util.Log.e("SyncWorker", "Sync exception occurred: ${e.message}", e)
@@ -191,7 +207,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     }
 
     private fun failure(msg: String) =
-        Result.failure(workDataOf("error" to msg))
+        SyncOutcome.Failed(workDataOf("error" to msg))
 
     @SuppressLint("InlinedApi")
     private fun makeForegroundInfo(text: String): ForegroundInfo {
@@ -254,6 +270,9 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             scheduleChain(context)
             scheduleWatchdog(context)
             scheduleContentTrigger(context)
+            // Independent unique work, so a long SMS backfill cannot delay or cancel
+            // the folder chain — and vice versa.
+            SmsSyncWorker.enqueueAutoSync(context)
             SyncAlarmScheduler.schedule(context)
             try {
                 SyncForegroundService.start(context)
@@ -287,6 +306,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             wm.cancelUniqueWork(CHAIN_WORK_NAME)
             wm.cancelUniqueWork(PERIODIC_WORK_NAME)
             wm.cancelUniqueWork(CONTENT_WORK_NAME)
+            SmsSyncWorker.cancel(context)
             SyncAlarmScheduler.cancel(context)
             try {
                 SyncForegroundService.stop(context)

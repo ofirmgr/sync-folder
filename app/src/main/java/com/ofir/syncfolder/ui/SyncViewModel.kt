@@ -18,6 +18,7 @@ import androidx.work.*
 import com.google.android.gms.auth.api.identity.Identity
 import com.ofir.syncfolder.auth.AuthManager
 import com.ofir.syncfolder.data.Prefs
+import com.ofir.syncfolder.sync.SmsSyncWorker
 import com.ofir.syncfolder.sync.SyncWorker
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
@@ -35,6 +36,7 @@ data class SyncUiState(
     val extensionFilter: String = "",
     val termsAccepted: Boolean = false,
     val backgroundSyncConsent: Boolean = false,
+    val smsSync: Boolean = false,
     val status: Status = Status.Idle,
     val currentFile: String? = null,
     val filesDone: Int = 0
@@ -98,6 +100,7 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
                 } ?: false
                 _state.update {
                     it.copy(
+                        smsSync = p.smsSync,
                         accountEmail = p.accountEmail,
                         folderName = p.folderName,
                         autoSync = p.autoSync,
@@ -204,6 +207,20 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun setSmsSync(enabled: Boolean) {
+        viewModelScope.launch {
+            val granted = com.ofir.syncfolder.sync.SmsSyncEngine.hasPermission(appContext)
+            val on = enabled && granted
+            prefs.setSmsSync(on)
+            // Start a backup when enabled; subsequent runs follow automatic sync.
+            if (on && state.value.autoSync) SmsSyncWorker.enqueueAutoSync(appContext)
+            if (!on) SmsSyncWorker.cancel(appContext)
+            if (enabled && !granted) {
+                _events.send(UiEvent.Toast("SMS access denied. Allow SMS permission in Android app settings, then enable SMS backup again."))
+            }
+        }
+    }
+
     fun setAutoSync(enabled: Boolean) {
         viewModelScope.launch {
             if (enabled && !state.value.backgroundSyncConsent) {
@@ -229,17 +246,37 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Folder and SMS are separate workers, so a manual sync fires whichever is
+     * configured. The status area follows the folder run when there is one, since
+     * that is the longer-running half the user is usually watching.
+     */
     fun syncNow() {
-        val work = OneTimeWorkRequestBuilder<SyncWorker>()
-            .setInputData(workDataOf(SyncWorker.KEY_TRIGGER to SyncWorker.TRIGGER_MANUAL))
-            .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .build()
-        wm.enqueue(work)
+        val snapshot = state.value
+        val constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+
+        val smsWork = if (snapshot.smsSync) {
+            OneTimeWorkRequestBuilder<SmsSyncWorker>()
+                .setInputData(workDataOf(SmsSyncWorker.KEY_TRIGGER to SmsSyncWorker.TRIGGER_MANUAL))
+                .setConstraints(constraints)
+                .build()
+                .also { wm.enqueue(it) }
+        } else null
+
+        val folderWork = if (snapshot.folderName != null) {
+            OneTimeWorkRequestBuilder<SyncWorker>()
+                .setInputData(workDataOf(SyncWorker.KEY_TRIGGER to SyncWorker.TRIGGER_MANUAL))
+                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                .setConstraints(constraints)
+                .build()
+                .also { wm.enqueue(it) }
+        } else null
+
+        val tracked = folderWork ?: smsWork ?: return
         _state.update { it.copy(status = SyncUiState.Status.Syncing, filesDone = 0, currentFile = null) }
 
         viewModelScope.launch {
-            wm.getWorkInfoByIdFlow(work.id).collect { info ->
+            wm.getWorkInfoByIdFlow(tracked.id).collect { info ->
                 when (info?.state) {
                     WorkInfo.State.RUNNING -> {
                         _state.update {
