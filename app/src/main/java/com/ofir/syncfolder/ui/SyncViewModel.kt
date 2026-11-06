@@ -18,7 +18,7 @@ import androidx.work.*
 import com.google.android.gms.auth.api.identity.Identity
 import com.ofir.syncfolder.auth.AuthManager
 import com.ofir.syncfolder.data.Prefs
-import com.ofir.syncfolder.sync.SmsSyncWorker
+import com.ofir.syncfolder.sync.SmsBackup
 import com.ofir.syncfolder.sync.SyncWorker
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
@@ -100,7 +100,7 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
                 } ?: false
                 _state.update {
                     it.copy(
-                        smsSync = p.smsSync,
+                        smsSync = SmsBackup.AVAILABLE && p.smsSync,
                         accountEmail = p.accountEmail,
                         folderName = p.folderName,
                         autoSync = p.autoSync,
@@ -208,13 +208,14 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setSmsSync(enabled: Boolean) {
+        if (!SmsBackup.AVAILABLE) return
         viewModelScope.launch {
-            val granted = com.ofir.syncfolder.sync.SmsSyncEngine.hasPermission(appContext)
+            val granted = SmsBackup.hasPermission(appContext)
             val on = enabled && granted
             prefs.setSmsSync(on)
             // Start a backup when enabled; subsequent runs follow automatic sync.
-            if (on && state.value.autoSync) SmsSyncWorker.enqueueAutoSync(appContext)
-            if (!on) SmsSyncWorker.cancel(appContext)
+            if (on && state.value.autoSync) SmsBackup.enqueueAutoSync(appContext)
+            if (!on) SmsBackup.cancelAutoSync(appContext)
             if (enabled && !granted) {
                 _events.send(UiEvent.Toast("SMS access denied. Allow SMS permission in Android app settings, then enable SMS backup again."))
             }
@@ -255,13 +256,7 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
         val snapshot = state.value
         val constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
 
-        val smsWork = if (snapshot.smsSync) {
-            OneTimeWorkRequestBuilder<SmsSyncWorker>()
-                .setInputData(workDataOf(SmsSyncWorker.KEY_TRIGGER to SmsSyncWorker.TRIGGER_MANUAL))
-                .setConstraints(constraints)
-                .build()
-                .also { wm.enqueue(it) }
-        } else null
+        val smsWork = if (snapshot.smsSync) SmsBackup.enqueueManual(appContext, constraints) else null
 
         val folderWork = if (snapshot.folderName != null) {
             OneTimeWorkRequestBuilder<SyncWorker>()
@@ -296,6 +291,7 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
                         val err = info.outputData.getString("error") ?: "Sync failed"
                         _state.update { it.copy(status = SyncUiState.Status.Error(err)) }
                     }
+                    WorkInfo.State.CANCELLED -> _state.update { it.copy(status = SyncUiState.Status.Idle) }
                     else -> {}
                 }
             }

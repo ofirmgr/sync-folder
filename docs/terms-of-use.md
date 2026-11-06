@@ -6,7 +6,7 @@ permalink: /terms/
 
 # Sync Folder Terms of Use
 
-Last updated: September 20, 2026
+Last updated: November 6, 2026
 
 These Terms of Use govern use of the Sync Folder Android application published
 by Ofir Meguri. By accepting these terms or using the synchronization feature,
@@ -16,7 +16,8 @@ the user agrees to them.
 
 Sync Folder provides one-way uploads of new or changed files from a folder the
 user selects on an Android device to a folder in the user's Google Drive.
-If separately enabled with SMS permission, the app also uploads each SMS
+The separately distributed standalone edition can also back up SMS. If enabled
+with SMS permission in that edition, the app uploads each SMS
 available through Android, grouped into one file per calendar month. Later syncs
 update the file for any month whose messages changed. Messages deleted from the
 phone, and files written by earlier versions of the app, remain in Drive until

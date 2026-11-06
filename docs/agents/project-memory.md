@@ -8,9 +8,10 @@
   permission/auth handling to make a sync pass.
 - Background scheduling must re-arm future work without replacing/cancelling worker that cold-started
   app. `ExistingWorkPolicy.REPLACE` on active unique work can cause `WorkerStoppedException`.
-- Scheduling architecture can change across WorkManager, alarms, boot recovery, foreground service,
-  and MediaStore triggers. Inspect current diff and device logs before edits or architecture claims;
-  do not canonize uncommitted behavior in this document.
+- Auto Sync is scheduled by WorkManager, with alarm and boot recovery plus optional MediaStore triggers.
+  These background entry points must not start a `dataSync` foreground service. Only user-initiated
+  transfers promote their workers. See `SyncWorker.kt`, `SyncBootReceiver.kt`, and `SyncAlarmReceiver.kt`
+  (2026-11-06). Inspect current diff and device logs before changes.
 - Interval values, Xiaomi state, entry counts, test outcomes, and device permissions are snapshots,
   not project memory. Verify live.
 
@@ -20,10 +21,10 @@
   (`schemaVersion: 3`): a header line then one `message` object per line, bucketed by
   the device's local zone. Deleted phone messages and legacy files remain in Drive;
   no automatic deletion or restore. Folder filters and Room records do not apply.
-  Runtime disclosure, privacy policy, terms, README, and Play SMS permission
-  declarations are related consumers.
+  Runtime disclosure, privacy policy, terms, README, and the standalone manifest
+  are related consumers.
 
-- Each automatic `SyncWorker.doWork` triggers enabled SMS backup through
+- In the standalone edition, each automatic `SyncWorker.doWork` triggers enabled SMS backup through
   `SmsSyncWorker.enqueueAutoSync` before folder validation or upload (2026-09-22,
   `SyncWorker.kt`, `SmsSyncWorker.kt`). SMS uses separate unique work named
   `sms_sync_chain`, with immediate eligibility and `KEEP`; it has no separate timer
@@ -46,3 +47,7 @@
   SMS consent is separate and defaults off; do not bump the shared terms gate solely
   for optional SMS, because every background entry point uses it and the view model
   disables Auto Sync for older consent versions (2026-09-20, `Prefs.kt`, `SyncViewModel.kt`).
+
+- The `standalone` flavor owns the SMS manifest permission, UI availability, and worker implementation.
+  `play` shares the application ID and preference schema but builds without the SMS worker or permission
+  (`app/build.gradle.kts`, `app/src/standalone`, `app/src/play`, 2026-11-06).

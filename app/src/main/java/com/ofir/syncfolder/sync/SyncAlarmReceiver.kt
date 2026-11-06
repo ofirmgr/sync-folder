@@ -10,7 +10,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
 import com.ofir.syncfolder.MainActivity
 import com.ofir.syncfolder.R
 import com.ofir.syncfolder.SyncApp
@@ -29,19 +28,8 @@ class SyncAlarmReceiver : BroadcastReceiver() {
                 val snap = prefs.snapshot()
 
                 if (snap.autoSync && snap.backgroundSyncConsent && snap.termsAcceptedVersion >= Prefs.CURRENT_TERMS_VERSION) {
-                    // Reschedule next alarm
-                    SyncAlarmScheduler.schedule(context)
-
-                    // Ensure WorkManager work is scheduled and alive
+                    // Repair WorkManager work and reschedule the alarm.
                     SyncWorker.ensureScheduled(context)
-
-                    // Start foreground service if enabled
-                    try {
-                        val serviceIntent = Intent(context, SyncForegroundService::class.java)
-                        ContextCompat.startForegroundService(context, serviceIntent)
-                    } catch (e: Exception) {
-                        android.util.Log.e("SyncAlarmReceiver", "Failed to start SyncForegroundService", e)
-                    }
 
                     // Check for stuck sync condition (> 2 hours without successful sync)
                     val lastSyncMs = snap.lastSyncMs ?: 0L

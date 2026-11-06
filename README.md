@@ -1,15 +1,15 @@
 # Sync Folder
 
-Android app that syncs a local folder and optionally all available SMS to your Google Drive (one-way upload).
+Android app that uploads files from a local folder to your Google Drive. The standalone edition also offers optional SMS backup.
 
 ## App Screenshot
 
 ![Folder sync screen before the SMS backup control was added](docs/images/ui.png)
 
-- Opt-in monthly SMS backups with runtime permission and disclosure; works without a selected folder
+- Standalone edition offers opt-in monthly SMS backup and works without a selected folder
 - Picks any folder via Android's system folder picker (SAF)
 - Uploads new/changed files to a matching folder in your Drive (`drive.file` scope — visible in My Drive)
-- Auto-syncs every 15 minutes in the background via WorkManager
+- Checks for changes about every 15 minutes in the background via WorkManager
 - Skips unchanged files using size + modification time
 
 ---
@@ -31,7 +31,7 @@ Android Studio handles this automatically. For CLI builds:
 
 ```bash
 ./bootstrap.sh      # downloads gradle-wrapper.jar
-./gradlew assembleDebug
+./gradlew assembleStandaloneDebug
 ```
 
 ### 3. Create Google Cloud credentials (automated)
@@ -50,8 +50,36 @@ Or manually — see the inline comments in `local.properties`.
 ```bash
 # From Android Studio: Run ▶
 # Or CLI (after bootstrap.sh + setup-gcloud.sh):
-./gradlew installDebug
+./gradlew installStandaloneDebug
 ```
+
+### Google Play release
+
+Build the signed Play bundle with `./gradlew :app:bundlePlayRelease`. It targets Android 16 (API 36)
+and supports folder sync. The standalone APK (`:app:assembleStandaloneRelease`) also includes SMS
+backup. Both variants use `com.ofir.syncfolder`. Installing one over the other requires matching
+signing certificates and an acceptable version code.
+
+Before uploading to Play's internal testing track:
+
+1. Publish the legal pages from `main` → `/docs` in the repository's GitHub Pages settings. Use
+   `./gradlew :app:verifyPlayReleaseUrls` to check that all three links embedded in the bundle work.
+   Set `privacy_policy_url`, `terms_url`, and `accessibility_url` in `local.properties` if using a different host.
+2. Run `./gradlew :app:testPlayReleaseUnitTest :app:lintPlayRelease :app:bundlePlayRelease`.
+
+Before requesting production review:
+
+1. Set up Play App Signing. Register the Play **app-signing certificate** SHA-1 for
+   `com.ofir.syncfolder` in the Android OAuth client configuration and prepare the OAuth consent
+   screen for the production audience. Verify Google sign-in and a synthetic test file upload from
+   a Play-installed build.
+2. Prepare the store listing, public privacy link, Data safety and App access disclosures. Describe
+   Google sign-in, user-selected file uploads to the user's Drive, and optional background folder
+   sync. Declare `dataSync` for the manual transfer and include a video showing **Sync Now**, its
+   notification, and the cancel action. Confirm any closed testing requirement for the developer account.
+3. On Android 15 and 16, verify manual sync and notification cancellation, Auto Sync while the app is
+   closed, and Auto Sync resuming after a reboot. Automatic sync runs through WorkManager and may be
+   delayed by Android.
 
 ---
 
@@ -60,11 +88,11 @@ Or manually — see the inline comments in `local.properties`.
 1. Open the app → **Sign in with Google** → grant Drive access when prompted
 2. Tap **Pick a folder** → navigate to the folder you want to sync
 3. Tap **Sync Now** to upload immediately
-4. Toggle **Auto Sync** to upload every 15 minutes when connected
+4. Toggle **Auto Sync** to check about every 15 minutes when connected
 
 Files appear in Google Drive under a folder matching your local folder's name.
 
-### SMS backup
+### SMS backup (standalone edition)
 
 SMS backup defaults to off. Updating the app preserves existing folder selection, filters,
 Google account, Auto Sync preference, and folder-sync consent. SMS permission is requested
@@ -98,12 +126,10 @@ restrict or delay access to some messages. Revoked SMS permission produces a syn
 allow it again in app settings or turn off SMS backup. Turning off SMS backup does not delete
 existing Drive files.
 
-Google Play distribution requires declaring restricted SMS permissions and approval for an
-eligible use such as backup/restore; this feature does not itself establish eligibility. See
-[Google Play SMS permissions policy](https://support.google.com/googleplay/android-developer/answer/10208820).
-Do not publish this build before completing that review and updating Play data disclosures.
+Use the `play` variant for Google Play distribution. Its manifest excludes `READ_SMS` and its
+build excludes the SMS reader and backup worker.
 
-Verification: `./gradlew testDebugUnitTest assembleDebug lintDebug`. Real SMS access, permission
+Verification: `./gradlew testStandaloneDebugUnitTest assembleStandaloneDebug lintStandaloneDebug`. Real SMS access, permission
 restrictions, and Drive upload must also be checked on an authorized device/account.
 
 ---

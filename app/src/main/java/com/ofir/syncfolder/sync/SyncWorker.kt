@@ -27,8 +27,12 @@ import com.ofir.syncfolder.data.AppDb
 import com.ofir.syncfolder.data.Prefs
 import com.ofir.syncfolder.data.PrefsData
 import com.ofir.syncfolder.drive.TokenExpiredException
+import kotlinx.coroutines.CancellationException
 
 class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
+
+    override suspend fun getForegroundInfo(): ForegroundInfo =
+        makeForegroundInfo(applicationContext.getString(R.string.notif_sync_title))
 
     override suspend fun doWork(): Result {
         val trigger = inputData.getString(KEY_TRIGGER) ?: TRIGGER_MANUAL
@@ -46,7 +50,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         // Trigger SMS before folder validation or I/O, including SMS-only setups.
         // Unique KEEP work preserves any backup already running or waiting to retry.
         if (trigger != TRIGGER_MANUAL && snap.smsSync) {
-            SmsSyncWorker.enqueueAutoSync(applicationContext)
+            SmsBackup.enqueueAutoSync(applicationContext)
         }
 
         val result = runSync(prefs, snap, trigger)
@@ -125,6 +129,8 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         if (isManual) {
             try {
                 setForeground(makeForegroundInfo("Syncing $folderName…"))
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) {
                 // Fall back gracefully to background execution if foreground service promotion fails
             }
@@ -216,6 +222,11 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_menu_upload)
             .setOngoing(true)
+            .addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                applicationContext.getString(android.R.string.cancel),
+                WorkManager.getInstance(applicationContext).createCancelPendingIntent(id)
+            )
             .build()
         return ForegroundInfo(NOTIF_SYNC_ID, notif, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
     }
@@ -267,38 +278,18 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
 
         /** Arms every background path. Safe to call repeatedly. */
         fun scheduleAll(context: Context) {
-            scheduleChain(context)
-            scheduleWatchdog(context)
-            scheduleContentTrigger(context)
+            ensureScheduled(context)
             // Independent unique work, so a long SMS backfill cannot delay or cancel
             // the folder chain — and vice versa.
-            SmsSyncWorker.enqueueAutoSync(context)
-            SyncAlarmScheduler.schedule(context)
-            try {
-                SyncForegroundService.start(context)
-            } catch (e: Exception) {
-                android.util.Log.e("SyncWorker", "Failed to start SyncForegroundService in scheduleAll", e)
-            }
+            SmsBackup.enqueueAutoSync(context)
         }
 
         /** Restores missing background work without replacing a worker that started the app. */
         fun ensureScheduled(context: Context) {
-            val wm = WorkManager.getInstance(context)
-            val chainStale = runCatching {
-                val infos = wm.getWorkInfosForUniqueWork(CHAIN_WORK_NAME).get()
-                // RUNNING or BLOCKED work is alive: REPLACE would cancel the sync in progress.
-                infos.isEmpty() || infos.all { it.state.isFinished }
-            }.getOrDefault(true)
-
-            scheduleChain(context, policy = if (chainStale) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP)
+            scheduleChain(context)
             scheduleWatchdog(context)
-            scheduleContentTrigger(context, policy = if (chainStale) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP)
+            scheduleContentTrigger(context)
             SyncAlarmScheduler.schedule(context)
-            try {
-                SyncForegroundService.start(context)
-            } catch (e: Exception) {
-                android.util.Log.e("SyncWorker", "Failed to start SyncForegroundService in ensureScheduled", e)
-            }
         }
 
         fun cancelAll(context: Context) {
@@ -306,13 +297,8 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             wm.cancelUniqueWork(CHAIN_WORK_NAME)
             wm.cancelUniqueWork(PERIODIC_WORK_NAME)
             wm.cancelUniqueWork(CONTENT_WORK_NAME)
-            SmsSyncWorker.cancel(context)
+            SmsBackup.cancelAutoSync(context)
             SyncAlarmScheduler.cancel(context)
-            try {
-                SyncForegroundService.stop(context)
-            } catch (e: Exception) {
-                android.util.Log.e("SyncWorker", "Failed to stop SyncForegroundService in cancelAll", e)
-            }
         }
 
         /**
@@ -323,7 +309,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         fun scheduleChain(
             context: Context,
             delayMinutes: Long = SYNC_INTERVAL_MINUTES,
-            policy: ExistingWorkPolicy = ExistingWorkPolicy.REPLACE
+            policy: ExistingWorkPolicy = ExistingWorkPolicy.KEEP
         ) {
             android.util.Log.i("SyncWorker", "scheduleChain with delay=$delayMinutes mins, policy=$policy")
             val work = OneTimeWorkRequestBuilder<SyncWorker>()
@@ -354,7 +340,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
          */
         fun scheduleContentTrigger(
             context: Context,
-            policy: ExistingWorkPolicy = ExistingWorkPolicy.REPLACE
+            policy: ExistingWorkPolicy = ExistingWorkPolicy.KEEP
         ) {
             if (!hasMediaPermission(context)) return
             android.util.Log.i("SyncWorker", "scheduleContentTrigger with policy=$policy")

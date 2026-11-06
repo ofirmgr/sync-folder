@@ -1,3 +1,6 @@
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URI
 import java.util.Properties
 
 plugins {
@@ -28,25 +31,33 @@ val keystoreProps = Properties().also { props ->
 fun quotedBuildConfigValue(value: String): String =
     "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
+val legalSite = "https://ofirmgr.github.io/sync-folder"
+val legalUrls = mapOf(
+    "PRIVACY_POLICY_URL" to localProps.getProperty("privacy_policy_url", "$legalSite/privacy/"),
+    "TERMS_URL" to localProps.getProperty("terms_url", "$legalSite/terms/"),
+    "ACCESSIBILITY_URL" to localProps.getProperty("accessibility_url", "$legalSite/accessibility/")
+)
+
 android {
     namespace = "com.ofir.syncfolder"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.ofir.syncfolder"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 2
-        versionName = "1.0.1"
+        targetSdk = 36
+        versionCode = 3
+        versionName = "1.1.0"
 
         val serverClientId = localProps.getProperty("server_client_id", "")
-        val privacyPolicyUrl = localProps.getProperty("privacy_policy_url", "")
-        val termsUrl = localProps.getProperty("terms_url", "")
-        val accessibilityUrl = localProps.getProperty("accessibility_url", "")
         buildConfigField("String", "SERVER_CLIENT_ID", quotedBuildConfigValue(serverClientId))
-        buildConfigField("String", "PRIVACY_POLICY_URL", quotedBuildConfigValue(privacyPolicyUrl))
-        buildConfigField("String", "TERMS_URL", quotedBuildConfigValue(termsUrl))
-        buildConfigField("String", "ACCESSIBILITY_URL", quotedBuildConfigValue(accessibilityUrl))
+        legalUrls.forEach { (name, url) -> buildConfigField("String", name, quotedBuildConfigValue(url)) }
+    }
+
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("standalone") { dimension = "distribution" }
+        create("play") { dimension = "distribution" }
     }
 
     signingConfigs {
@@ -102,14 +113,11 @@ tasks.register("validatePlayRelease") {
             if (localProps.getProperty("server_client_id").isNullOrBlank()) {
                 add("server_client_id in local.properties")
             }
-            if (localProps.getProperty("privacy_policy_url").isNullOrBlank()) {
-                add("privacy_policy_url in local.properties")
-            }
-            if (localProps.getProperty("terms_url").isNullOrBlank()) {
-                add("terms_url in local.properties")
-            }
-            if (localProps.getProperty("accessibility_url").isNullOrBlank()) {
-                add("accessibility_url in local.properties")
+            for ((name, url) in legalUrls) {
+                val uri = runCatching { URI(url) }.getOrNull()
+                if (uri == null || uri.scheme != "https" || uri.host == null || uri.userInfo != null) {
+                    add("a public HTTPS URL for $name")
+                }
             }
             if (keystoreProps.isEmpty()) {
                 add("keystore.properties")
@@ -122,8 +130,32 @@ tasks.register("validatePlayRelease") {
     }
 }
 
-tasks.matching { it.name == "bundleRelease" }.configureEach {
+tasks.matching { it.name == "bundlePlayRelease" }.configureEach {
     dependsOn("validatePlayRelease")
+}
+
+tasks.register("verifyPlayReleaseUrls") {
+    group = "verification"
+    description = "Checks that the public legal pages in the Play bundle are reachable."
+    dependsOn("validatePlayRelease")
+
+    doLast {
+        val failures = legalUrls.mapNotNull { (name, url) ->
+            val connection = URI(url).toURL().openConnection() as HttpURLConnection
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 10_000
+            try {
+                val status = connection.responseCode
+                if (status in 200..299 && connection.contentType?.startsWith("text/html") == true) null
+                else "$name ($url): HTTP $status, content type ${connection.contentType}"
+            } catch (e: IOException) {
+                "$name ($url): ${e.message}"
+            } finally {
+                connection.disconnect()
+            }
+        }
+        check(failures.isEmpty()) { "Public legal pages are unavailable:\n${failures.joinToString("\n")}" }
+    }
 }
 
 dependencies {

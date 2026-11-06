@@ -35,6 +35,7 @@ import androidx.credentials.exceptions.GetCredentialException
 import androidx.documentfile.provider.DocumentFile
 import com.ofir.syncfolder.BuildConfig
 import com.ofir.syncfolder.auth.AuthManager
+import com.ofir.syncfolder.sync.SmsBackup
 import com.ofir.syncfolder.sync.SyncWorker
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -50,9 +51,11 @@ fun SyncScreen(viewModel: SyncViewModel) {
     val credentialManager = remember { CredentialManager.create(context) }
     val authManager = remember { AuthManager(context) }
     var showSmsDialog by remember { mutableStateOf(false) }
-    val smsPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { viewModel.setSmsSync(true) }
+    val smsPermissionLauncher = if (SmsBackup.AVAILABLE) {
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+            viewModel.setSmsSync(true)
+        }
+    } else null
     var showTermsDialog by remember { mutableStateOf(false) }
     var showBackgroundSyncDialog by remember { mutableStateOf(false) }
     var actionAfterTerms by remember { mutableStateOf(PendingAction.None) }
@@ -203,17 +206,19 @@ fun SyncScreen(viewModel: SyncViewModel) {
 
             HorizontalDivider()
 
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Back up all SMS", style = MaterialTheme.typography.bodyLarge)
-                    Text("Save SMS to Google Drive / Sync Folder SMS. No folder selection needed.",
-                        style = MaterialTheme.typography.bodySmall)
+            if (SmsBackup.AVAILABLE) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Back up all SMS", style = MaterialTheme.typography.bodyLarge)
+                        Text("Save SMS to Google Drive / Sync Folder SMS. No folder selection needed.",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(
+                        modifier = Modifier.semantics { contentDescription = "Back up all SMS" },
+                        checked = state.smsSync,
+                        onCheckedChange = { if (it) showSmsDialog = true else viewModel.setSmsSync(false) }
+                    )
                 }
-                Switch(
-                    modifier = Modifier.semantics { contentDescription = "Back up all SMS" },
-                    checked = state.smsSync,
-                    onCheckedChange = { if (it) showSmsDialog = true else viewModel.setSmsSync(false) }
-                )
             }
 
             // ── Auto-sync toggle ─────────────────────────────────────────
@@ -223,7 +228,8 @@ fun SyncScreen(viewModel: SyncViewModel) {
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Auto Sync", style = MaterialTheme.typography.bodyLarge)
-                    Text("Check files and enabled SMS backup about every 15 minutes",
+                    Text(if (SmsBackup.AVAILABLE) "Check files and enabled SMS backup about every 15 minutes"
+                        else "Check files about every 15 minutes",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -301,7 +307,7 @@ fun SyncScreen(viewModel: SyncViewModel) {
     }
 }
 
-    if (showSmsDialog) {
+    if (SmsBackup.AVAILABLE && showSmsDialog) {
         AlertDialog(
             onDismissRequest = { showSmsDialog = false },
             title = { Text("Back up SMS to Google Drive?") },
@@ -309,8 +315,8 @@ fun SyncScreen(viewModel: SyncViewModel) {
                 Text(
                     "Sync Folder will read all available SMS, including message text, phone numbers, " +
                         "dates, and status, and upload them directly to your signed-in Google Drive account. " +
-                        "Auto Sync also uploads while the app is closed. Each SMS is saved in its own " +
-                        "JSON file and updated on later syncs. Messages deleted from the phone remain " +
+                        "Auto Sync also uploads while the app is closed. SMS backups are saved in one " +
+                        "file per calendar month and updated on later syncs. Messages deleted from the phone remain " +
                         "in Drive. MMS and RCS are not included. You can turn this off at any " +
                         "time; existing Drive backups remain.",
                     modifier = Modifier.verticalScroll(rememberScrollState())
@@ -319,10 +325,10 @@ fun SyncScreen(viewModel: SyncViewModel) {
             confirmButton = {
                 TextButton(onClick = {
                     showSmsDialog = false
-                    if (com.ofir.syncfolder.sync.SmsSyncEngine.hasPermission(context)) {
+                    if (SmsBackup.hasPermission(context)) {
                         viewModel.setSmsSync(true)
                     } else {
-                        smsPermissionLauncher.launch(Manifest.permission.READ_SMS)
+                        smsPermissionLauncher?.launch(Manifest.permission.READ_SMS)
                     }
                 }) { Text("Allow SMS backup") }
             },
@@ -445,10 +451,10 @@ private fun DataUseSection(
             color = MaterialTheme.colorScheme.primary
         )
         Text(
-            "Sync Folder reads the folder you choose and, if enabled, all available SMS. It uploads files and monthly SMS backup files " +
-                "directly to your Google Drive. When Auto Sync is enabled, this can happen " +
-                "in the background. Enabled SMS backup runs with each automatic sync, subject to Android delays. The app has no " +
-                "developer-operated server, advertising, or analytics.",
+            "Sync Folder reads files from the folder you choose and uploads them directly to your Google Drive. " +
+                "When Auto Sync is enabled, this can happen in the background. " +
+                (if (SmsBackup.AVAILABLE) "If you enable SMS backup, the app also uploads available SMS in monthly backup files. " else "") +
+                "The app has no developer-operated server, advertising, or analytics.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -496,7 +502,8 @@ private fun TermsConsentDialog(
             SelectionContainer {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        "Sync Folder uploads selected files and, if enabled, individual SMS backup files to Google Drive. " +
+                        "Sync Folder uploads selected files to Google Drive. " +
+                            (if (SmsBackup.AVAILABLE) "If enabled, it also uploads monthly SMS backup files. " else "") +
                             "Sync can fail, be delayed, or be incomplete because of device, network, " +
                             "permission, or Google service issues."
                     )
@@ -539,8 +546,9 @@ private fun BackgroundSyncConsentDialog(
         text = {
             SelectionContainer {
                 Text(
-                    "When enabled, Sync Folder may read the selected folder and enabled SMS backup " +
-                        "and upload them to Google Drive. It checks about every 15 minutes, " +
+                    "When enabled, Sync Folder may read files from the selected folder and upload them to Google Drive. " +
+                        (if (SmsBackup.AVAILABLE) "It also uploads SMS when SMS backup is enabled. " else "") +
+                        "It checks about every 15 minutes, " +
                         "including when you are not actively using the " +
                         "app. Android may delay this work to save battery."
                 )

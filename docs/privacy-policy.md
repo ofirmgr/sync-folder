@@ -6,10 +6,14 @@ permalink: /privacy/
 
 # Sync Folder Privacy Policy
 
-Last updated: September 20, 2026
+Last updated: November 6, 2026
 
 Sync Folder is published by Ofir Meguri. This policy explains how the
 Sync Folder Android application handles information.
+
+The Google Play edition syncs user-selected folders. The separately distributed
+standalone edition also offers optional SMS backup. References to SMS in this
+policy apply only to the standalone edition.
 
 ## Information the app accesses
 
