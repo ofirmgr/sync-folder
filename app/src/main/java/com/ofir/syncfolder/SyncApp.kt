@@ -8,6 +8,7 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import com.ofir.syncfolder.data.Prefs
+import com.ofir.syncfolder.sync.SmsSyncWorker
 import com.ofir.syncfolder.sync.SyncWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,7 +26,9 @@ class SyncApp : Application() {
             val prefs = Prefs(this@SyncApp)
             val snap = prefs.snapshot()
             if (snap.autoSync && snap.backgroundSyncConsent && snap.termsAcceptedVersion >= Prefs.CURRENT_TERMS_VERSION) {
-                SyncWorker.scheduleAll(this@SyncApp)
+                // Not scheduleAll: its REPLACE would cancel a worker that cold-started this process.
+                SyncWorker.ensureScheduled(this@SyncApp)
+                SmsSyncWorker.enqueueAutoSync(this@SyncApp)
             }
         }
     }

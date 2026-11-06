@@ -286,8 +286,8 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             val wm = WorkManager.getInstance(context)
             val chainStale = runCatching {
                 val infos = wm.getWorkInfosForUniqueWork(CHAIN_WORK_NAME).get()
-                infos.isEmpty() || infos.all { it.state.isFinished } ||
-                    infos.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.BLOCKED }
+                // RUNNING or BLOCKED work is alive: REPLACE would cancel the sync in progress.
+                infos.isEmpty() || infos.all { it.state.isFinished }
             }.getOrDefault(true)
 
             scheduleChain(context, policy = if (chainStale) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP)
