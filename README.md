@@ -16,6 +16,13 @@ Android app that uploads files from a local folder to your Google Drive. The sta
 
 ## Setup
 
+### Public website
+
+The public website is generated from the existing Markdown pages in `docs/`.
+Run `npm ci` and `npm run build:site` with Node.js 24 to produce `site-dist/`.
+See [website deployment](docs/agents/site-deployment.md) for local preview,
+the isolated Vercel deployment at https://sync-folder.ofir.fun/, and the OAuth URL migration boundary.
+
 ### 1. Install toolchain
 
 ```bash

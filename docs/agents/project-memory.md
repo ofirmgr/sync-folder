@@ -51,3 +51,30 @@
 - The `standalone` flavor owns the SMS manifest permission, UI availability, and worker implementation.
   `play` shares the application ID and preference schema but builds without the SMS worker or permission
   (`app/build.gradle.kts`, `app/src/standalone`, `app/src/play`, 2026-11-06).
+
+- OAuth branding ownership (2026-11-07, Google Search Console and Google Auth Platform):
+  verify the root URL-prefix property `https://ofirmgr.github.io/` as well as the app path.
+  Its HTML verification file is served by `ofirmgr/ofirmgr.github.io` from `main` at
+  `/google8da5631e8cb88aec.html` (commit `b3f8be4`). Keep that file published to retain ownership.
+  The copy in this repo's `docs/` verifies `/sync-folder/` only. Cloud may require 24 hours
+  after ownership verification before a branding retry recognizes it; check live status.
+
+- Domain ownership (2026-11-10, live Google Search Console, GCP IAM, and Vercel DNS):
+  verified the Domain property `sc-domain:ofir.fun` through DNS using a Google account
+  confirmed as `roles/owner` on `sync-folder-742823`. Search Console showed `Ownership verified`.
+  Added only apex TXT record `rec_eca54418804d1b72e705673e` in Vercel scope
+  `ofirmgrs-projects`; all seven pre-existing DNS records were preserved. Keep the verification
+  TXT published. Website hosting, OAuth branding URLs/authorized domains, and the branding
+  submission were not changed by this verification; domain ownership is not brand approval.
+
+- Public website (2026-11-10, approved Vercel deployment, anonymous HTTPS checks, and
+  Google Cloud UI): `npm run build:site` renders the existing `docs/` Markdown into
+  ignored `site-dist/`. The separate `sync-folder-site` project serves
+  `https://sync-folder.ofir.fun/`; all four routes and CSS returned 200 and matched the
+  artifact. Existing DNS records, the personal site, and Dira360 were preserved.
+  Google saved the new homepage/privacy/terms URLs and added `ofir.fun` while retaining
+  `ofirmgr.github.io`; saving updated the existing pending request. Branding remains
+  under review. The reviewed reply was sent with explicit owner approval on the same
+  date. Source mapping, deployment ID, and verification status are in
+  `docs/agents/site-deployment.md`. Android defaults and published Play links still use
+  the working GitHub Pages site; an Android release was outside this deployment.

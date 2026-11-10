@@ -24,3 +24,8 @@ app/src/main/res/values/secrets.xml
 *.db
 *.db-shm
 *.db-wal
+
+# Generated public website
+/node_modules/
+/site-dist/
+/.vercel/

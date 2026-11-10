@@ -1,0 +1,12 @@
+{
+  "name": "sync-folder-site",
+  "private": true,
+  "type": "module",
+  "engines": { "node": "24.x" },
+  "scripts": {
+    "build:site": "node scripts/build-site.mjs"
+  },
+  "devDependencies": {
+    "marked": "18.2.0"
+  }
+}
